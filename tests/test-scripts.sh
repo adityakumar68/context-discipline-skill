@@ -32,8 +32,8 @@ out=$(cd "$T/none" && echo '{bad json' | hook); rc=$?
 
 echo STATUS.md > "$T/big/.claude/brain"; head -c 12000 /dev/zero | tr '\0' 'x' > "$T/big/STATUS.md"
 out=$(echo "{\"cwd\": \"$T/big\"}" | hook)
-printf '%s\n' "$out" | grep -q '^\[STATUS.md is 12000 bytes; trim it under 10,000 so it is not cut\]$' && [ ${#out} -lt 9500 ] \
-  && ok "hook: oversized STATUS cut to 9000 bytes + trim line (total ${#out} chars)" || no "hook oversized"
+printf '%s\n' "$out" | grep -q '^\[STATUS.md is 12,000 characters, over the 9,000 limit, so only the first 9,000 are shown here' && [ ${#out} -lt 10000 ] \
+  && ok "hook: oversized STATUS cut to 9,000 characters + trim line (total ${#out} chars)" || no "hook oversized"
 
 mkdir -p "$T/fh/.claude" "$T/fh/x"; echo "$T/proj/docs/STATUS.md" > "$T/fh/.claude/brain"
 out=$(echo "{\"cwd\": \"$T/fh/x\"}" | HOME="$T/fh" bash "$H")

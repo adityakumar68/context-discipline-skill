@@ -81,5 +81,52 @@ mkdir -p "$HM/Downloads/.claude" "$HM/Downloads/other/x"; echo '../.aws/credenti
 out=$(run_hook "$HM/Downloads/other/x")
 check "parent-folder pointer reaching outside its folder: refused" refused "$out" "$HM/Downloads/.claude/brain"
 
+# --- size: Claude Code replaces hook output over 10,000 characters (JS string length) with a 2,000-char preview ---
+# units: the trimmed output's length as Claude Code measures it (UTF-16 units); fails if the bytes are not UTF-8.
+units() { python3 -I -c 'import sys; s = sys.stdin.buffer.read().decode("utf-8").strip(); print(len(s.encode("utf-16-le")) // 2)' 2>/dev/null; }
+# count <char>: how many times <char> occurs in stdin.
+count() { python3 -I -c 'import sys; print(sys.stdin.buffer.read().decode("utf-8", "replace").count(sys.argv[1]))' "$1"; }
+# make_status <dir> <python expression for the text>: a project with a STATUS.md holding that text.
+make_status() {
+  mkdir -p "$1/.claude"; echo STATUS.md > "$1/.claude/brain"
+  python3 -I -c 'import sys; open(sys.argv[1], "w", encoding="utf-8").write(eval(sys.argv[2]))' "$1/STATUS.md" "$2"
+}
+
+make_status "$HM/cjk" '"\u72b6" * 4000 + "END-MARKER\n"'     # 4,011 characters, 12,011 bytes
+out=$(run_hook "$HM/cjk")
+check "4,011-char CJK STATUS (12,011 bytes) printed whole: counted in characters, not bytes" \
+  eval 'has "$out" END-MARKER && ! has "$out" "characters,"'
+
+make_status "$HM/fits" '"x" * 8999 + "\n"'                    # exactly 9,000 characters
+out=$(run_hook "$HM/fits")
+check "9,000-char STATUS printed whole, no trim notice" eval 'has "$out" "loaded from" && ! has "$out" "characters,"'
+
+make_status "$HM/ascii" '"x" * 12000'
+out=$(run_hook "$HM/ascii")
+check "12,000-char STATUS: notice gives the real count and the limit" \
+  has "$out" "[STATUS.md is 12,000 characters, over the 9,000 limit, so only the first 9,000 are shown here."
+check "12,000-char STATUS: 9,000 shown, whole output under 10,000 characters" \
+  eval '[ "$(printf "%s\n" "$out" | head -n 1 | units)" = 9000 ] && [ "$(printf "%s" "$out" | units)" -le 10000 ]'
+
+make_status "$HM/cjkbig" '"\u72b6" * 10000'
+out=$(run_hook "$HM/cjkbig")
+check "10,000-char CJK STATUS: cut on a character boundary to 9,000 characters" \
+  eval '[ "$(printf "%s" "$out" | count "$(printf "\347\212\266")")" = 9000 ] && has "$out" "is 10,000 characters"'
+
+make_status "$HM/emoji" '"\U0001F600" * 5000'                  # 5,000 emoji = 10,000 UTF-16 units
+out=$(run_hook "$HM/emoji")
+check "emoji STATUS: counted as Claude Code counts them (2 each), valid UTF-8, output under 10,000" \
+  eval 'has "$out" "is 10,000 characters" && [ "$(printf "%s" "$out" | units)" -le 10000 ]'
+
+make_status "$HM/mixed" '"a" + "\u20ac" * 9500'
+out=$(run_hook "$HM/mixed")
+check "odd byte offset (a + euro signs): the cut never splits a character" eval '[ "$(printf "%s" "$out" | units)" -le 10000 ]'
+
+long="$HM"; for i in 1 2 3 4 5 6 7 8 9; do long="$long/$(printf 'd%.0s' $(seq 1 100))"; done
+make_status "$long" '"y" * 8999 + "\n"'
+out=$(run_hook "$long")
+check "very long project path (${#long} chars): STATUS line + notice still fit under 10,000" \
+  eval '[ "$(printf "%s" "$out" | units)" -le 10000 ] && has "$out" "loaded from"'
+
 echo "== hook tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

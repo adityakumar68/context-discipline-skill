@@ -16,8 +16,8 @@
 # exits 0. Never writes files, never touches the network.
 # Stops before $HOME and "/" so ~/.claude (global config) is never read as a brain.
 
-MAX_BYTES=9500   # above this, print a cut version (hook output > 10,000 chars becomes a 2,000-char preview)
-CUT_BYTES=9000
+LIMIT=9000   # characters of STATUS printed in full; longer files are cut to this many, with a notice
+CAP=10000    # Claude Code replaces hook output over 10,000 characters with a 2,000-character preview
 
 # 1. Find the session's working directory.
 input=""
@@ -111,7 +111,9 @@ esac
 [ -f "$status" ] || refuse "names a missing file, or something that is not a regular file"
 [ -r "$status" ] || refuse "names a file that cannot be read"
 
-# 4. Print it (cut if too large), then one line naming the source.
+# 4. Print it (cut on a character boundary if too long), then one line naming the source.
+# Characters are counted as Claude Code counts them: JavaScript string length, so most characters are 1
+# and emoji (4-byte UTF-8) are 2. Bytes are never fewer, so a file of at most $budget bytes always fits.
 size=$(wc -c < "$status" 2>/dev/null | tr -d '[:space:]')
 case "$size" in
   ''|*[!0-9]*) exit 0 ;;
@@ -119,13 +121,43 @@ esac
 text=$(tr -d '\000' < "$status" 2>/dev/null | wc -c | tr -d '[:space:]')
 [ "$text" = "$size" ] || refuse "names a file that is not text"
 
-if [ "$size" -gt "$MAX_BYTES" ]; then
-  head -c "$CUT_BYTES" "$status" 2>/dev/null
-  printf '\n[STATUS.md is %s bytes; trim it under 10,000 so it is not cut]\n' "$size"
+loaded="(Project brain loaded from $status. Working rules: context-discipline skill.)"
+budget=$((CAP - 200 - ${#loaded}))   # 200: room for the trim notice; ${#loaded} counts bytes (>= characters)
+[ "$budget" -gt "$LIMIT" ] && budget=$LIMIT
+
+chars=$size
+if [ "$size" -gt "$budget" ]; then
+  # characters = bytes that do not continue a UTF-8 sequence, plus one more for each 4-byte sequence
+  chars=$(( $(tr -d '\200-\277' < "$status" | wc -c) + $(tr -cd '\360-\367' < "$status" | wc -c) ))
+fi
+
+# commas <n>: 12345 -> 12,345
+commas() {
+  local n="$1" out=""
+  while [ ${#n} -gt 3 ]; do out=",${n#"${n%???}"}$out"; n="${n%???}"; done
+  printf '%s' "$n$out"
+}
+
+if [ "$chars" -gt "$budget" ]; then
+  # Find the byte offset of the first character that would go over the budget, and cut there.
+  set -- $(head -c $((budget * 4)) "$status" 2>/dev/null | od -An -v -tu1 | awk -v max="$budget" '
+    { for (i = 1; i <= NF; i++) {
+        b = $i + 0
+        if (b >= 128 && b < 192 && pend > 0) { pend--; n++; continue }   # continuation byte
+        u = 1; pend = 0
+        if (b >= 240 && b < 248) { u = 2; pend = 3 } else if (b >= 224 && b < 240) pend = 2; else if (b >= 192 && b < 224) pend = 1
+        if (units + u > max) { done = 1; exit }
+        units += u; n++
+    } }
+    END { print n + 0, units + 0 }')
+  case "${1:-}${2:-}" in ''|*[!0-9]*) exit 0 ;; esac
+  head -c "$1" "$status" 2>/dev/null
+  printf '\n[%s is %s characters, over the %s limit, so only the first %s are shown here. Trim it so nothing is cut.]\n' \
+    "$(basename -- "$status")" "$(commas "$chars")" "$(commas "$budget")" "$(commas "$2")"
 else
   cat "$status" 2>/dev/null
   # keep the closing line on its own line even if the file lacks a final newline
   [ -n "$(tail -c 1 "$status" 2>/dev/null)" ] && printf '\n'
 fi
-printf '(Project brain loaded from %s. Working rules: context-discipline skill.)\n' "$status"
+printf '%s\n' "$loaded"
 exit 0
