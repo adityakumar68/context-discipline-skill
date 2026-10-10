@@ -4,6 +4,41 @@ Three prompts (in `evals.json`), each run once with the skill and once without, 
 Iteration 2 re-ran only the with-skill side after edits to the skill; its baseline is iteration 1's without-skill
 run. How the runs were made and graded: [README.md](README.md).
 
+## What this measures, and what it does not
+
+These evals measure **checklist adherence**: whether an agent that was told to read the skill then follows it in a
+written plan. They do not measure the skill's goal, a smaller main context and project state that survives a
+compaction or a new session. A later audit of the runs found:
+
+- **The rubric restates the skill.** Each of the 16 assertions restates a line of the skill or of the brief it was
+  built from. Eval 1's assertions 1 and 4 can only be passed with this skill's `.claude/brain` file and its hook;
+  the baseline built its own working SessionStart hook and failed both.
+- **The gap is three yes/no events in single runs.** Eval 3's choice to delegate the spec counts four times (26.7
+  points), eval 1's use of the skill's file name and hook 13.3 points, and one privacy line in eval 2 5.6 points.
+  With those three flipped, the baseline also scores 93.3%.
+- **No statistical support.** One run per arm per eval. The per-eval differences are 0.40, 0.17 and 0.80; a
+  paired t-test gives p ≈ 0.13, and an exact sign-flip test on three pairs cannot go below p = 0.25 (two-sided).
+- **Unblinded LLM grading.** One LLM grader per iteration, with no second rater or human check. It knew which arm
+  it was grading (the run folders are named `with_skill` and `without_skill`), and the iteration-2 grader got a
+  stricter rule and iteration 1's grading as a reference.
+- **Neither arm is clean.** With-skill prompts told the agent to read SKILL.md first and follow it, so whether the
+  skill triggers on its own was never tested. Baseline prompts said not to use the skill, but it was installed, so
+  every baseline saw its description in the skill listing; the eval-1 baseline also read memory notes that held the
+  skill's rules, and the eval-2 baseline read a project memory with similar rules.
+- **Two of three evals are dry runs.** They grade a written plan, not what the subagents then do.
+- **Tuned on the same evals.** The skill was edited between iterations to target the graded weak spots (the score
+  did not change). The skill has been rewritten since, so these results describe an older version.
+- **Not published:** the raw run outputs and grading files.
+
+Re-scored without the assertions the audit questions:
+
+| Scoring | With skill | Baseline |
+|---|---|---|
+| As graded (all 16 assertions) | 93.3% | 47.7% |
+| Without eval 1's assertions 1 and 4 | 88.9% | 56.7% |
+| Also without eval 2's assertion 5 (privacy line, off the skill's goal) | 88.9% | 62.2% |
+| Also crediting the baseline's working hook, and counting eval 3's four delegation assertions as one | 91.7% | 75.0% |
+
 ## Pass counts
 
 | Eval | Iteration 1, with skill | Iteration 1, without skill (baseline) | Iteration 2, with skill |
@@ -46,12 +81,12 @@ Results are listed as iteration 1 with skill / without skill / iteration 2 with 
 | # | Assertion | Results |
 |---|---|---|
 | 1 | A `.claude/brain` pointer exists in the project and names an existing STATUS file | pass / fail / pass |
-| 2 | The STATUS file is under 10,000 bytes and has project-specific content (mentions Obsidian or the static site) | pass / pass / pass |
+| 2 | The STATUS file is under 10,000 bytes (the limit at the time) and has project-specific content (mentions Obsidian or the static site) | pass / pass / pass |
 | 3 | A big-picture/overview doc with a dated decision log exists | pass / pass / pass |
 | 4 | `brain-hook.sh` run with cwd set to a project subfolder prints the STATUS content (automatic loading works) | pass / fail / pass |
 | 5 | The reply tells the user what goes in memory vs CLAUDE.md vs STATUS/overview | fail / fail / fail |
 
-Assertions 1–4 are checked by `grade_eval1.py`; assertion 5 by reading the reply.
+Assertions 1–4 are checked by `grade_eval1.py`; assertion 5 by the LLM grader, reading the reply.
 
 ### Eval 2: related-work survey
 
@@ -76,18 +111,24 @@ Assertions 1–4 are checked by `grade_eval1.py`; assertion 5 by reading the rep
 
 ## Caveats
 
+The audit findings are summarized at the top. In addition:
+
 - **n = 1 per configuration.** Each eval ran once per configuration. The ± figures are spread across the three
   evals, not across repeated runs, so they say nothing about run-to-run variance.
 - **Eval 2 is not a clean A/B.** The baseline run read a project memory that already held rules similar to this
-  skill's (deliverables in files, short hand-backs), so its 5 / 6 overstates what an agent does with no such
-  rules.
-- **Eval 1's baseline was also not clean.** It used the term "project brain", which suggests the same kind of
-  contamination. It also built a different mechanism, a project-level SessionStart hook that does print STATUS,
-  so assertions 1 and 4 (which test for the pointer and the global hook) under-credit it.
+  skill's (deliverables in files, short hand-backs).
+- **Eval 1's baseline read the skill's rules.** Before starting, it read the user's memory files that held them
+  (short hand-backs, delegated specs) and a settings file with a STATUS hook. It then built a different mechanism,
+  a project-level SessionStart hook that does print STATUS, so assertions 1 and 4 (which test for the pointer and
+  the global hook) under-credit it. The with-skill run, for its part, passed assertion 4 although the global hook
+  was only proposed, not installed, at the end of its run: the grader calls the hook script directly.
 - **Eval 1's last assertion fails in both iterations** because the test forbade memory changes: the with-skill runs
   put their memory reasoning in a proposal file instead of the reply.
 - **Evals 2 and 3 are dry runs.** They grade a written plan (steps, dispatch prompts, the reply to the user), not a
-  live run, so they show what the agent intends to do, not that its subagents then behave.
+  live run, so they show what the agent intends to do, not that its subagents then behave. Eval 3's context brief
+  (`notes/auth-context-brief.md`) did not exist in the run.
+- **The token figures run the other way.** The only cost data shows the skill adding 9–13k tokens per run, mostly
+  from loading its text; no eval measured context saved later in a long session.
 - **Lenient passes.** In iteration 1, eval 3 assertion 2 passed although the dispatch restated most decision
   values next to the path; iteration 2's dispatch referred to decisions by id only. Eval 1 assertion 3's automatic
   check cited STATUS.md, while the dated decision log was in the overview file; the pass stands.
