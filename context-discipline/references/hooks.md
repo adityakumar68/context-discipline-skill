@@ -152,5 +152,5 @@ echo '{"cwd": "'"$P"'", "session_id": "nudge-'$RANDOM'", "transcript_path": "'"$
 
 For one run (headless `claude -p`, SDK agents, evals, a benchmark's baseline): set `CD_HOOKS=off` in its
 environment and all three hooks do nothing. For one project: delete `<project>/.claude/brain`. Everywhere:
-`./install.sh --uninstall` from the repo, or remove the three entries above from `~/.claude/settings.json` (an older
+`./install.sh --uninstall` from the repo, or remove the three entries above from `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` (an older
 install may have four `SessionStart` entries with matchers; `--uninstall` removes both forms).

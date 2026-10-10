@@ -104,7 +104,7 @@ Live: `/context`. A past session:
 python3 "${CLAUDE_SKILL_DIR}/scripts/ctx-audit.py" <transcript.jsonl | folder> [--top N] [--include-sidechains] [--json]
 ```
 
-Transcripts sit in `~/.claude/projects/<cwd, non-alphanumerics as "-">/`; subagent files are read automatically.
+Transcripts sit in `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<cwd, non-alphanumerics as "-">/`; subagent files are read automatically.
 It prints context measured from API usage, then visible content by category. The top row is often
 `[not in transcript]` (system prompt, tool schemas, thinking). Act on the top visible categories: Bash output →
 tail/grep, logs; Bash input → helper scripts, Write; Write input → delegate drafting; Read output → narrow reads,
