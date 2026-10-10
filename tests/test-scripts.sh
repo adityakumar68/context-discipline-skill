@@ -53,8 +53,8 @@ ms=$(python3 -c "import time; print(int((time.time() - $start) * 100))")
 mkdir -p "$T/init"; bash "$I" "$T/init" >/dev/null; echo edit >> "$T/init/STATUS.md"
 a=$(sum "$T/init/STATUS.md" "$T/init/00-Project-Overview.md" "$T/init/.claude/brain")
 out=$(bash "$I" "$T/init"); b=$(sum "$T/init/STATUS.md" "$T/init/00-Project-Overview.md" "$T/init/.claude/brain")
-[ "$a" = "$b" ] && [ "$(printf '%s\n' "$out" | grep -c 'exists, left untouched')" = 3 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 5 ] \
-  && ok "init-brain: second run overwrote nothing, reported 3x 'exists', 5-line summary" || no "init-brain rerun"
+[ "$a" = "$b" ] && [ "$(printf '%s\n' "$out" | grep -c 'exists, left untouched')" = 3 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 6 ] \
+  && ok "init-brain: second run overwrote nothing, reported 3x 'exists', 6-line summary" || no "init-brain rerun"
 
 out=$(echo "{\"cwd\": \"$T/init\"}" | hook | tail -n 1)
 printf '%s' "$out" | grep -qF "$T/init/STATUS.md" && ok "init-brain + hook: pointer works end to end" || no "init+hook"

@@ -65,5 +65,39 @@ init "$HM/p4" docs/brain/STATUS.md >/dev/null
 out=$(printf '{"cwd": "%s"}' "$HM/p4/sub" | env -u CLAUDE_PROJECT_DIR HOME="$HM" bash "$H" | tail -n 1)
 check "nested custom STATUS path: the hook loads it" has "$out" "loaded from $HM/p4/docs/brain/STATUS.md"
 
+# --- .claude/compactions/ (compact-log.sh's summaries) is kept out of git -------------------------------------------
+IGN='.claude/compactions/'
+ignores() { grep -c -x -F -- "$IGN" "$1/.gitignore" 2>/dev/null || true; }   # lines that are exactly the entry
+mkdir -p "$HM/g1"; out=$(init "$HM/g1"); rc=$?
+check "no .gitignore: created with the .claude/compactions/ line, summary says so" \
+  eval '[ $rc = 0 ] && [ "$(ignores "$HM/g1")" = 1 ] && has "$out" "$HM/g1/.gitignore" && has "$out" "$IGN"'
+out=$(init "$HM/g1"); rc=$?
+check "second run: the line is not added twice" eval '[ $rc = 0 ] && [ "$(ignores "$HM/g1")" = 1 ] && has "$out" "already"'
+
+mkdir -p "$HM/g2"; printf 'node_modules/\n*.log' > "$HM/g2/.gitignore"    # no final newline on purpose
+init "$HM/g2" >/dev/null
+check "existing .gitignore without a final newline: kept, line added on its own line" \
+  eval '[ "$(sed -n 1p "$HM/g2/.gitignore")" = node_modules/ ] && [ "$(sed -n 2p "$HM/g2/.gitignore")" = "*.log" ] && [ "$(sed -n 3p "$HM/g2/.gitignore")" = "$IGN" ]'
+
+mkdir -p "$HM/g3"; printf 'build/\r\n' > "$HM/g3/.gitignore"; init "$HM/g3" >/dev/null
+check "CRLF .gitignore: the added line ends in CRLF too" \
+  eval '[ "$(tr -cd "\r" < "$HM/g3/.gitignore" | wc -c | tr -d " ")" = 2 ] && grep -q "^\.claude/compactions/.$" "$HM/g3/.gitignore"'
+
+mkdir -p "$HM/g4"; printf '/.claude/compactions\n' > "$HM/g4/.gitignore"; cp "$HM/g4/.gitignore" "$T/g4-orig"
+init "$HM/g4" >/dev/null
+check "an equivalent entry (/.claude/compactions) already there: .gitignore left as it was" cmp -s "$HM/g4/.gitignore" "$T/g4-orig"
+
+mkdir -p "$HM/g5" "$HM/shared"; echo 'x/' > "$HM/shared/ignore"; ln -s "$HM/shared/ignore" "$HM/g5/.gitignore"
+out=$(init "$HM/g5"); rc=$?
+check "symlinked .gitignore: not edited, summary says to add the line by hand, exit 0" \
+  eval '[ $rc = 0 ] && [ "$(cat "$HM/shared/ignore")" = x/ ] && has "$out" "NOT changed"'
+
+if command -v git >/dev/null 2>&1; then
+  mkdir -p "$HM/g6"; git -C "$HM/g6" init -q 2>/dev/null; init "$HM/g6" >/dev/null
+  mkdir -p "$HM/g6/.claude/compactions"; echo s > "$HM/g6/.claude/compactions/2026-01-01-000000-abcdef12.md"
+  check "in a git repo: compaction logs are ignored, the brain pointer is not" \
+    eval 'git -C "$HM/g6" check-ignore -q .claude/compactions/2026-01-01-000000-abcdef12.md && ! git -C "$HM/g6" check-ignore -q .claude/brain'
+fi
+
 echo "== init-brain tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -5,6 +5,8 @@
 #   - <status-relpath> (default STATUS.md) from the STATUS template
 #   - 00-Project-Overview.md next to it, from the overview template
 #   - <project-root>/.claude/brain, the pointer the SessionStart hook (brain-hook.sh) follows
+#   - the line .claude/compactions/ in <project-root>/.gitignore (created if missing), so the compaction
+#     summaries the PostCompact hook (compact-log.sh) saves are never committed
 # Templates come from ../references/brain-templates.md. Existing files are never
 # overwritten; the summary says which ones already existed.
 
@@ -112,10 +114,28 @@ else
   } > "$pointer" && pointer_state="created; points to $status_rel" || pointer_state="NOT created: write failed"
 fi
 
+# Keep the compaction summaries that compact-log.sh saves out of git: they can quote anything the session saw.
+ignore_line='.claude/compactions/'
+gitignore="$root/.gitignore"
+if [ -L "$gitignore" ] || { [ -e "$gitignore" ] && [ ! -f "$gitignore" ]; }; then
+  ignore_state="NOT changed: not a regular file; add the line $ignore_line to it yourself"
+elif [ -f "$gitignore" ] && tr -d '\r' < "$gitignore" | grep -Eqx '[[:space:]]*/?\.claude/compactions/?[[:space:]]*'; then
+  ignore_state="exists, already ignores $ignore_line"
+elif [ -f "$gitignore" ]; then
+  nl=$'\n'; grep -q $'\r$' "$gitignore" 2>/dev/null && nl=$'\r\n'
+  lead=""; [ -s "$gitignore" ] && [ -n "$(tail -c 1 "$gitignore")" ] && lead="$nl"
+  printf '%s%s%s' "$lead" "$ignore_line" "$nl" >> "$gitignore" 2>/dev/null \
+    && ignore_state="added $ignore_line" || ignore_state="NOT changed: write failed; add the line $ignore_line yourself"
+else
+  printf '%s\n' "$ignore_line" > "$gitignore" 2>/dev/null \
+    && ignore_state="created; ignores $ignore_line" || ignore_state="NOT changed: write failed; add the line $ignore_line yourself"
+fi
+
 echo "Project brain for $root:"
-echo "  STATUS:   $status ($status_state)"
-echo "  Overview: $overview ($overview_state)"
-echo "  Pointer:  $pointer ($pointer_state)"
+echo "  STATUS:    $status ($status_state)"
+echo "  Overview:  $overview ($overview_state)"
+echo "  Pointer:   $pointer ($pointer_state)"
+echo "  Gitignore: $gitignore ($ignore_state)"
 case "$status_state$overview_state$pointer_state" in
   *"NOT created"*) echo "Some files were NOT created; fix the cause above and run again." >&2; exit 1 ;;
 esac
