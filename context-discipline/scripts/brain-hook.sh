@@ -21,110 +21,33 @@
 LIMIT=9000   # characters of STATUS printed in full; longer files are cut to this many, with a notice
 CAP=10000    # Claude Code replaces hook output over 10,000 characters with a 2,000-character preview
 
-# 1. Find the session's working directory.
+# 1-3. Find the session's brain: walk up from its cwd to the nearest <dir>/.claude/brain (stopping before
+#      $HOME and "/") and accept the STATUS file it names only if it is a text file inside <dir>. The rules live
+#      in brain-lib.sh, shared with the other context-discipline hooks so they all agree on what a brain is.
+here="${BASH_SOURCE[0]%/*}"; [ "$here" = "${BASH_SOURCE[0]}" ] && here=.
+. "$here/brain-lib.sh" 2>/dev/null || exit 0
+
 input=""
 if [ ! -t 0 ]; then
   input=$(cat 2>/dev/null)
 fi
-
 # Input that is not a JSON object stops the hook (Claude Code always sends one). Valid JSON without "cwd",
 # or no JSON parser at all, falls back to $CLAUDE_PROJECT_DIR, then $PWD.
-cwd=""
-if [ -n "$input" ]; then
-  if command -v jq >/dev/null 2>&1; then
-    cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null) || exit 0
-  elif command -v python3 >/dev/null 2>&1; then
-    cwd=$(printf '%s' "$input" | python3 -I -c 'import json,sys
-v = json.load(sys.stdin).get("cwd") or ""
-print(v if isinstance(v, str) else "")' 2>/dev/null) || exit 0
-  fi
-fi
-[ -z "$cwd" ] && cwd="${CLAUDE_PROJECT_DIR:-}"
-[ -z "$cwd" ] && cwd="$PWD"
+cwd=$(cd_session_cwd "$input") || exit 0
+cd_find_brain "$cwd" || exit 0
+pointer="$CD_POINTER"
 
-case "$cwd" in
-  /*) ;;
+cd_check_pointer   # from here on LC_ALL=C: count and match bytes
+case $? in
+  0) ;;
+  1) printf '(Project brain not loaded: %s %s.)\n' "$pointer" "$CD_REFUSED"; exit 0 ;;
   *) exit 0 ;;
 esac
-
-# 2. Walk up to the nearest <dir>/.claude/brain, stopping before $HOME and "/". Both the cwd and $HOME are
-#    compared with every symlink and ".." resolved, so neither a symlinked HOME nor "x/.." reaches ~/.claude.
-cwd=$(cd -P -- "$cwd" 2>/dev/null && pwd -P) || exit 0
-home=$(cd -P -- "${HOME:-/}" 2>/dev/null && pwd -P) || home="${HOME%/}"
-dir="${cwd%/}"
-pointer=""
-while [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "$home" ]; do
-  if [ -f "$dir/.claude/brain" ]; then
-    pointer="$dir/.claude/brain"
-    break
-  fi
-  parent=$(dirname "$dir" 2>/dev/null) || exit 0
-  [ "$parent" = "$dir" ] && break
-  dir="$parent"
-done
-[ -z "$pointer" ] && exit 0
-
-# 3. Read the STATUS path from the pointer and accept only a text file inside <dir>.
-LC_ALL=C; export LC_ALL   # from here on, count and match bytes
-
-# refuse <reason>: one warning line naming the pointer (never the file's content), then stop.
-refuse() {
-  printf '(Project brain not loaded: %s %s.)\n' "$pointer" "$1"
-  exit 0
-}
-
-# physical <path>: <path> with every symlink resolved, its last part included. Fails if a folder is missing.
-physical() {
-  local p="$1" d b t n=0
-  while :; do
-    d=$(dirname -- "$p") && b=$(basename -- "$p") || return 1
-    d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
-    case "$b" in .|..) return 1 ;; esac
-    if [ "$d" = / ]; then p="/$b"; else p="$d/$b"; fi
-    [ -L "$p" ] || break
-    n=$((n + 1)); [ "$n" -le 20 ] || return 1
-    t=$(readlink -- "$p") || return 1
-    case "$t" in /*) p="$t" ;; *) p="$d/$t" ;; esac
-  done
-  printf '%s\n' "$p"
-}
-
-rel=""
-while IFS= read -r line || [ -n "$line" ]; do
-  line="${line%$'\r'}"
-  line="${line#$'\357\273\277'}"            # drop a UTF-8 byte-order mark
-  line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
-  line="${line%"${line##*[![:space:]]}"}"   # trim trailing whitespace
-  case "$line" in
-    ''|'#'*) continue ;;
-  esac
-  rel="$line"
-  break
-done < "$pointer" 2>/dev/null
-[ -n "$rel" ] || refuse "names no file"
-
-case "$rel" in
-  /*|'~'*) refuse "must name its STATUS file by a path relative to its project folder" ;;
-esac
-root=$(cd -P -- "$dir" 2>/dev/null && pwd -P) || exit 0
-status=$(physical "$root/$rel") || refuse "names a missing file"
-case "$status" in
-  "$root"/*) ;;
-  *) refuse "names a file outside its project folder" ;;
-esac
-[ -f "$status" ] || refuse "names a missing file, or something that is not a regular file"
-[ -r "$status" ] || refuse "names a file that cannot be read"
+status="$CD_STATUS"; size="$CD_SIZE"
 
 # 4. Print it (cut on a character boundary if too long), then one line naming the source.
 # Characters are counted as Claude Code counts them: JavaScript string length, so most characters are 1
 # and emoji (4-byte UTF-8) are 2. Bytes are never fewer, so a file of at most $budget bytes always fits.
-size=$(wc -c < "$status" 2>/dev/null | tr -d '[:space:]')
-case "$size" in
-  ''|*[!0-9]*) exit 0 ;;
-esac
-text=$(tr -d '\000' < "$status" 2>/dev/null | wc -c | tr -d '[:space:]')
-[ "$text" = "$size" ] || refuse "names a file that is not text"
-
 loaded="(Project brain loaded from $status. Working rules: context-discipline skill.)"
 budget=$((CAP - 200 - ${#loaded}))   # 200: room for the trim notice; ${#loaded} counts bytes (>= characters)
 [ "$budget" -gt "$LIMIT" ] && budget=$LIMIT
