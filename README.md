@@ -275,6 +275,11 @@ moved to `skill-backups/` instead of deleted. Projects keep their `.claude/brain
 `.claude/compactions/` and the `.gitignore` line. The context note's state files (a few bytes per session) stay in
 `${TMPDIR:-/tmp}/context-discipline/` until the system clears its temp folder.
 
+To turn the hooks off for some runs only, without uninstalling, set `CD_HOOKS=off` in their environment (for
+example `CD_HOOKS=off claude -p ...`): all three hooks then do nothing. The hooks fire in headless `claude -p`, SDK and
+eval runs too, so use this for any run that must not see a STATUS file or context notes, such as a benchmark's
+baseline arm.
+
 ## FAQ and troubleshooting
 
 **The hook does not seem to fire.** Check `/hooks`; restart Claude Code only if the hook is missing. Then run the
@@ -322,7 +327,8 @@ corrected scores: [evals/RESULTS.md](evals/RESULTS.md); how to re-run: [evals/RE
 
 An outcome benchmark is being designed: repeated multi-session tasks run with and without the skill, measured with
 `ctx-audit.py --json` and by whether the work survives compactions and new sessions. It has no results yet, and
-nothing in this README depends on it.
+nothing in this README depends on it. Its runs without the skill set `CD_HOOKS=off` (see Uninstalling), so a global
+install does not leak into them.
 
 ## Tests
 

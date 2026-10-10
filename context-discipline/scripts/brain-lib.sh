@@ -49,10 +49,12 @@ cd_session_cwd() {
 # cd_find_brain <cwd>: walk up from <cwd> to the nearest <dir>/.claude/brain, stopping before $HOME and "/".
 # Both <cwd> and $HOME are compared with every symlink and ".." resolved, so neither a symlinked HOME nor
 # "x/.." reaches ~/.claude. Sets CD_POINTER (the pointer file) and CD_ROOT (<dir>, symlinks resolved).
-# Fails if <cwd> is not an absolute path to an existing folder, or no pointer is found.
+# Fails if <cwd> is not an absolute path to an existing folder, or no pointer is found, or if the environment
+# sets CD_HOOKS=off (all the hooks then act as outside a brain project: for headless runs and benchmarks).
 cd_find_brain() {
   local cwd="$1" home dir
   CD_POINTER=""; CD_ROOT=""
+  [ "${CD_HOOKS:-}" = off ] && return 1
   case "$cwd" in
     /*) ;;
     *) return 1 ;;

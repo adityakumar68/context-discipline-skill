@@ -279,6 +279,8 @@ check "context above the guessed 200K window: the window must be 1M (45%)" eval 
 mkdir -p "$HM/plain/x"; gen "$TR/x" a:150000
 run "$HM/plain/x" "$TR/x" "sess-$((++k))"
 check "no brain pointer: no output even at 75%" quiet
+run "$P" "$TR/x" "sess-$((++k))" CD_HOOKS=off
+check "CD_HOOKS=off: no output even at 75% in a brain project" quiet
 mkdir -p "$HM/refused/.claude"; echo "$P/docs/STATUS.md" > "$HM/refused/.claude/brain"
 run "$HM/refused" "$TR/x" "sess-$((++k))"
 check "pointer the SessionStart hook refuses: no output" quiet

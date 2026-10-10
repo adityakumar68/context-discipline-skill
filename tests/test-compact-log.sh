@@ -112,5 +112,10 @@ out=$(input "$N" "python path summary" | env -u CLAUDE_PROJECT_DIR PATH="$NOJQ" 
 check "no jq on PATH: python3 reads the input, summary saved" \
   eval '[ $rc = 0 ] && grep -lq "python path summary" "$N/.claude/compactions"/*.md'
 
+# CD_HOOKS=off turns all three hooks off (headless runs, benchmarks): nothing is written.
+mkdir -p "$HM/off/.claude"; echo STATUS.md > "$HM/off/.claude/brain"; echo s > "$HM/off/STATUS.md"
+out=$(input "$HM/off" | env -u CLAUDE_PROJECT_DIR CD_HOOKS=off HOME="$HM" bash "$L" 2>&1); rc=$?
+check "CD_HOOKS=off: exit 0, nothing printed, no log written" eval '[ $rc = 0 ] && [ -z "$out" ] && [ ! -e "$HM/off/.claude/compactions" ]'
+
 echo "== compact-log tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -199,5 +199,12 @@ check "HOME is a symlink, cwd is the physical path: the home pointer is not used
 out=$(printf '{"cwd": "%s"}' "$T/realhome/proj/.." | env -u CLAUDE_PROJECT_DIR HOME="$T/realhome" bash "$H")
 check "cwd with '..' that lands on \$HOME: the home pointer is not used" [ -z "$out" ]
 
+# CD_HOOKS=off turns all three hooks off (headless runs, benchmarks); other values change nothing.
+point STATUS.md
+out=$(printf '{"cwd": "%s"}' "$P" | env -u CLAUDE_PROJECT_DIR CD_HOOKS=off HOME="$HM" bash "$H" 2>&1); rc=$?
+check "CD_HOOKS=off: prints nothing, exit 0" eval '[ $rc = 0 ] && [ -z "$out" ]'
+out=$(printf '{"cwd": "%s"}' "$P" | env -u CLAUDE_PROJECT_DIR CD_HOOKS=on HOME="$HM" bash "$H" 2>&1)
+check "CD_HOOKS=on: STATUS printed as usual" has "$out" project-p-status
+
 echo "== hook tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]
