@@ -20,16 +20,21 @@ Usage: ./install.sh [--dry-run] [--uninstall] [--skip-claude-md] [-h|--help]
 Installs the context-discipline skill for Claude Code into $CLAUDE_CONFIG_DIR, or ~/.claude if that is unset:
   1. Skill:     copies context-discipline/ to <dir>/skills/context-discipline/
                 (an existing copy that differs is first moved to <dir>/skill-backups/)
-  2. Hook:      adds one SessionStart hook with no matcher, so it fires for every source (startup,
-                resume, clear, compact, fork), running skills/context-discipline/scripts/brain-hook.sh,
-                to <dir>/settings.json (older entries for the same hook are replaced)
+  2. Hooks:     adds three hooks to <dir>/settings.json, each in one entry with no matcher (older
+                entries for the same hook are replaced), running skills/context-discipline/scripts/...
+                  SessionStart     brain-hook.sh   every source (startup, resume, clear, compact, fork):
+                                                   prints the project's STATUS file
+                  PostCompact      compact-log.sh  every compaction: saves the summary in the project
+                  UserPromptSubmit ctx-nudge.sh    every prompt: a short note at 40% of the context
+                                                   window and every 15% after (5-second timeout)
+                The last two act only in projects with a brain (.claude/brain).
   3. CLAUDE.md: appends one line telling Claude when to follow the skill
 settings.json and CLAUDE.md are backed up to <file>.bak-<timestamp> before they are changed.
 Steps that are already done are skipped, so running it again is safe. To update: git pull && ./install.sh
 
 Options:
   --dry-run         print every planned change and change nothing
-  --uninstall       remove the skill, the hook entries and the CLAUDE.md line (backups first)
+  --uninstall       remove the skill, the three hooks and the CLAUDE.md line (backups first)
   --skip-claude-md  leave CLAUDE.md alone
   -h, --help        show this help
 EOF
@@ -52,8 +57,9 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required (it edits setting
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 SRC="$REPO_DIR/context-discipline"
-[ -f "$SRC/SKILL.md" ] && [ -f "$SRC/scripts/brain-hook.sh" ] \
-  || die "cannot find the skill at $SRC. Run install.sh from a full clone of the repo."
+for f in SKILL.md scripts/brain-hook.sh scripts/brain-lib.sh scripts/compact-log.sh scripts/ctx-nudge.sh; do
+  [ -f "$SRC/$f" ] || die "cannot find the skill at $SRC ($f is missing). Run install.sh from a full clone of the repo."
+done
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-${HOME:?HOME is not set}/.claude}"
 case "$CLAUDE_DIR" in
@@ -68,7 +74,8 @@ DEST="$SKILLS_DIR/context-discipline"
 BACKUP_DIR="$CLAUDE_DIR/skill-backups"   # outside skills/, so Claude Code never loads a backup as a second skill
 SETTINGS="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
-HOOK="$DEST/scripts/brain-hook.sh"
+SCRIPTS="$DEST/scripts"
+HOOK="$SCRIPTS/brain-hook.sh"
 TS=$(date +%Y%m%d-%H%M%S)
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -78,8 +85,15 @@ helper() {
   python3 -I - "$@" <<'PY'
 import filecmp, json, os, shlex, shutil, sys, tempfile
 
-MARKER = "context-discipline/scripts/brain-hook.sh"
-SOURCES = "startup, resume, clear, compact, fork"   # what an entry with no matcher fires on (fork since 2.1.214)
+PREFIX = "context-discipline/scripts/"
+# (event, script, what an entry with no matcher fires on, extra fields of a new entry)
+HOOKS = (
+    ("SessionStart", "brain-hook.sh", "every source", " (startup, resume, clear, compact, fork)", {}),  # fork: 2.1.214+
+    ("PostCompact", "compact-log.sh", "every compaction", " (manual and auto)", {}),
+    ("UserPromptSubmit", "ctx-nudge.sh", "every prompt", "", {"timeout": 5}),
+)
+SCRIPTS = tuple(h[1] for h in HOOKS)
+NO_MATCHER = {"UserPromptSubmit"}   # events that ignore "matcher": every entry fires every time
 IGNORE = {"__pycache__", ".DS_Store"}
 
 
@@ -108,8 +122,9 @@ def load_settings(path):
     hooks = data.get("hooks")
     if hooks is not None and not isinstance(hooks, dict):
         fail(f'"hooks" in {path} is not an object.')
-    if isinstance(hooks, dict) and not isinstance(hooks.get("SessionStart", []), list):
-        fail(f'"hooks.SessionStart" in {path} is not a list.')
+    for event, *_ in HOOKS:
+        if isinstance(hooks, dict) and not isinstance(hooks.get(event, []), list):
+            fail(f'"hooks.{event}" in {path} is not a list.')
     return True, data
 
 
@@ -168,23 +183,23 @@ def hook_command(hook_path):
     return 'bash "' + esc(hook_path) + '"'
 
 
-def script_of(command):
-    """The brain-hook.sh path a hook command runs, with ~ and $HOME expanded. "" if the command cannot run
+def script_of(command, script):
+    """The path of <script> that a hook command runs, with ~ and $HOME expanded. "" if the command cannot run
     (unbalanced quotes); None if it cannot be told (other variables, or no path)."""
     try:
         words = shlex.split(command)
     except ValueError:
         return ""
     for w in words:
-        if MARKER in w:
+        if PREFIX + script in w:
             p = os.path.expanduser(os.path.expandvars(w))
             return None if "$" in p else p
     return None
 
 
-def missing_script(h, hook_path):
+def missing_script(h, script, hook_path):
     """The script path of our hook h if it does not exist (and is not the one this run installs), else None."""
-    p = script_of(h["command"])
+    p = script_of(h["command"], script)
     if p is None or os.path.isfile(p) or os.path.realpath(p) == os.path.realpath(hook_path):
         return None
     return p or h["command"]
@@ -196,13 +211,16 @@ def hooks_of(entry):
     return []
 
 
-def is_ours(h):
-    return isinstance(h, dict) and isinstance(h.get("command"), str) and MARKER in h["command"]
+def is_ours(h, scripts=SCRIPTS):
+    """Is h a hook that runs one of <scripts> from the installed skill?"""
+    return (isinstance(h, dict) and isinstance(h.get("command"), str)
+            and any(PREFIX + s in h["command"] for s in scripts))
 
 
-def covers_all(matcher):
-    """Does a SessionStart entry with this matcher fire for every source, including ones added later?"""
-    return matcher is None or (isinstance(matcher, str) and matcher.strip() in ("", "*"))
+def covers_all(event, matcher):
+    """Does an entry with this matcher fire every time the event happens (for SessionStart: every source,
+    including ones added later)?"""
+    return event in NO_MATCHER or matcher is None or (isinstance(matcher, str) and matcher.strip() in ("", "*"))
 
 
 def label(entry):
@@ -210,44 +228,62 @@ def label(entry):
     return "no matcher" if m is None else (m or '""')
 
 
-def plan_install(data, command, hook_path):
-    """Edit data so hooks.SessionStart holds exactly one of our hooks, in an entry with no matcher (every source),
-    whose script exists. Returns ((verb, rest) describing the change, whether a new entry was added), or
-    (None, False) if it already holds."""
+def plan_install(data, event, script, hook_path):
+    """Edit data so hooks.<event> holds exactly one hook running <script>, in an entry with no matcher (it fires
+    every time), whose script exists. Returns ((verb, rest) describing the change, whether a new entry was
+    added), or (None, False) if it already holds."""
+    _, _, every, detail, extra = next(h for h in HOOKS if h[0] == event)
+    mine = (script,)
     hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
-    entries = hooks.get("SessionStart", [])
-    ours = [(e, h) for e in entries if isinstance(e, dict) for h in hooks_of(e) if is_ours(h)]
-    missing = [m for m in (missing_script(h, hook_path) for e, h in ours) if m]
-    keep = next((h for e, h in ours if covers_all(e.get("matcher")) and not missing_script(h, hook_path)), None)
+    entries = hooks.get(event, [])
+    ours = [(e, h) for e in entries if isinstance(e, dict) for h in hooks_of(e) if is_ours(h, mine)]
+    missing = [m for m in (missing_script(h, script, hook_path) for e, h in ours) if m]
+    keep = next((h for e, h in ours
+                 if covers_all(event, e.get("matcher")) and not missing_script(h, script, hook_path)), None)
     if keep is not None and len(ours) == 1:
         return None, False
     removed, kept_entries = [], []
     for e in entries:
-        if not (isinstance(e, dict) and any(is_ours(h) for h in hooks_of(e))):
+        if not (isinstance(e, dict) and any(is_ours(h, mine) for h in hooks_of(e))):
             kept_entries.append(e)
             continue
-        rest = [h for h in e["hooks"] if h is keep or not is_ours(h)]
+        rest = [h for h in e["hooks"] if h is keep or not is_ours(h, mine)]
         removed += [label(e)] * (len(e["hooks"]) - len(rest))
         if rest:
             e["hooks"] = rest
             kept_entries.append(e)
     if keep is None:
-        kept_entries.append({"hooks": [{"type": "command", "command": command}]})
-    data.setdefault("hooks", {})["SessionStart"] = kept_entries
+        kept_entries.append({"hooks": [dict({"type": "command", "command": hook_command(hook_path)}, **extra)]})
+    data.setdefault("hooks", {})[event] = kept_entries
     n = len(removed)
-    old = f"{n} old SessionStart hook {'entry' if n == 1 else 'entries'} ({', '.join(removed)})"
+    old = f"{n} old {event} hook {'entry' if n == 1 else 'entries'} ({', '.join(removed)})"
     gone = f"; the old hook ran {', '.join(sorted(set(missing)))}, which does not exist" if missing else ""
     if keep is not None:
-        return ("remove", f"{old}; the entry for every source stays{gone}"), False
+        return ("remove", f"{old}; the entry for {every} stays{gone}"), False
     if removed:
-        return ("replace", f"{old} with one for every source ({SOURCES}){gone}"), True
-    return ("add", f"one SessionStart hook for every source ({SOURCES})"), True
+        return ("replace", f"{old} with one for {every}{detail}{gone}"), True
+    return ("add", f"one {event} hook for {every}{detail}"), True
+
+
+def plan_all(data, scripts_dir):
+    """plan_install for each of our hooks: [(event, change, added, command)] for the hooks that change."""
+    out = []
+    for event, script, *_ in HOOKS:
+        path = os.path.join(scripts_dir, script)
+        change, added = plan_install(data, event, script, path)
+        if change is not None:
+            out.append((event, change, added, hook_command(path)))
+    return out
 
 
 def said(change, dry):
     """('add', 'x') -> 'added x', or 'would add x' in a dry run."""
     verb, rest = change
     return f"would {verb} {rest}" if dry == "1" else f"{verb.rstrip('e')}ed {rest}"
+
+
+def said_all(plan, dry):
+    return "; ".join(said(change, dry) for _, change, _, _ in plan)
 
 
 def dump(data):
@@ -264,13 +300,13 @@ def need_writable(path):
             fail(f"cannot change {path}: the folder {d} is read-only.")
 
 
-def cmd_check(path, md_path, line, hook_path, uninstall, skip_md):
+def cmd_check(path, md_path, line, scripts_dir, uninstall, skip_md):
     """Find every problem that would stop the run halfway, before anything is changed."""
     exists, data = load_settings(path)
     if uninstall == "1":
         changes = exists and bool(plan_uninstall(data))
     else:
-        changes = plan_install(data, hook_command(hook_path), hook_path)[0] is not None
+        changes = bool(plan_all(data, scripts_dir))
     if changes:
         need_writable(path)
     if skip_md == "1":
@@ -281,30 +317,31 @@ def cmd_check(path, md_path, line, hook_path, uninstall, skip_md):
         need_writable(md_path)
 
 
-def cmd_settings_install(path, hook_path, ts, dry):
-    settings_install(path, hook_path, ts, dry)
+def cmd_settings_install(path, scripts_dir, ts, dry):
+    settings_install(path, scripts_dir, ts, dry)
     _, data = load_settings(path)
     if data.get("disableAllHooks") is True:
-        print('settings.json: NOTE: "disableAllHooks" is true there, so Claude Code runs no hooks, this one '
+        print('settings.json: NOTE: "disableAllHooks" is true there, so Claude Code runs no hooks, these '
               "included, until you remove it")
 
 
-def settings_install(path, hook_path, ts, dry):
+def settings_install(path, scripts_dir, ts, dry):
     exists, data = load_settings(path)
-    command = hook_command(hook_path)
-    what, added = plan_install(data, command, hook_path)
-    if what is None:
-        print("settings.json: unchanged, the hook is already there (one SessionStart entry, every source)")
+    plan = plan_all(data, scripts_dir)
+    if not plan:
+        print("settings.json: unchanged, the hooks are already there (SessionStart, PostCompact, UserPromptSubmit;"
+              " one entry each)")
         return
     if dry == "1":
         where = f"backup first to {path}.bak-{ts}" if exists else f"new file {path}"
-        print(f"settings.json: {said(what, dry)}; {where}")
-        if added:
-            print(f"               the hook runs: {command}")
+        print(f"settings.json: {said_all(plan, dry)}; {where}")
+        for event, _, added, command in plan:
+            if added:
+                print(f"               {event} runs: {command}")
         return
     saved = f"; backup: {backup(path, ts)}" if exists else "; created the file"
     write_atomic(path, dump(data))
-    print(f"settings.json: {said(what, dry)}{saved}")
+    print(f"settings.json: {said_all(plan, dry)}{saved}")
 
 
 def plan_uninstall(data):
@@ -526,7 +563,7 @@ skill_uninstall() {
 }
 
 # Check settings.json and CLAUDE.md before touching anything, so a problem stops the run with no change at all.
-helper check "$SETTINGS" "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$HOOK" "$UNINSTALL" "$SKIP_MD" || exit 1
+helper check "$SETTINGS" "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$SCRIPTS" "$UNINSTALL" "$SKIP_MD" || exit 1
 
 if [ "$DRY" = 1 ]; then
   echo "context-discipline installer: DRY RUN, nothing will be changed"
@@ -549,7 +586,7 @@ if [ "$UNINSTALL" = 1 ]; then
 else
   [ "$DRY" = 1 ] || mkdir -p "$CLAUDE_DIR"
   skill_install
-  out=$(helper settings-install "$SETTINGS" "$HOOK" "$TS" "$DRY") || die "editing settings.json failed (see above)."
+  out=$(helper settings-install "$SETTINGS" "$SCRIPTS" "$TS" "$DRY") || die "editing settings.json failed (see above)."
   report "$out"
   if [ "$SKIP_MD" = 1 ]; then
     report "CLAUDE.md:     skipped (--skip-claude-md)"
@@ -568,22 +605,24 @@ if [ "$DRY" = 1 ]; then
 elif [ "$UNINSTALL" = 1 ]; then
   cat <<EOF
 Next steps:
-  1. Claude Code picks up the change within a few seconds: open /hooks to check the hook is gone, and
-     restart Claude Code only if it is still listed.
-  2. Projects keep their .claude/brain pointer, STATUS.md and overview; delete .claude/brain in a
-     project if you no longer want anything loaded there.
+  1. Claude Code picks up the change within a few seconds: open /hooks to check the hooks are gone, and
+     restart Claude Code only if they are still listed.
+  2. Projects keep their .claude/brain pointer, STATUS.md, overview and .claude/compactions/ logs;
+     delete them in a project if you no longer want them.
 To install again: ./install.sh
 EOF
 else
   cat <<EOF
 Next steps:
-  1. Claude Code picks up the new hook within a few seconds: open /hooks to check the SessionStart hook
-     is listed, and restart Claude Code only if it is not.
+  1. Claude Code picks up the new hooks within a few seconds: open /hooks to check the SessionStart,
+     PostCompact and UserPromptSubmit hooks are listed, and restart Claude Code only if they are not.
   2. In each project that will outlive one session, set up its brain:
        bash "$DEST/scripts/init-brain.sh" <project-root>
      then fill in STATUS.md and 00-Project-Overview.md and commit them with .claude/brain.
-     Or ask Claude: "set up a project brain for this repo".
-  3. Check the hook finds it (it prints your STATUS, then a "Project brain loaded from" line):
+     Or ask Claude: "set up a project brain for this repo". In brain projects the other two hooks save
+     each compaction summary to .claude/compactions/ (kept out of git) and add a short note when the
+     context reaches 40% of its window and every 15% after.
+  3. Check the SessionStart hook finds it (it prints your STATUS, then a "Project brain loaded from" line):
        echo '{"cwd": "<project-root>/some/subdir", "source": "startup"}' | bash "$HOOK"
 To update later: git pull && ./install.sh
 EOF

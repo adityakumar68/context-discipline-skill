@@ -27,17 +27,36 @@ inst() {
 }
 
 # jq_ <settings.json> <python expression> [args...]: true if the expression holds.
-# In the expression: d = the parsed file, ours() = [(event, matcher, command)] for our hook, A = extra args.
+# In the expression: d = the parsed file, A = extra args, ours() = [(event, matcher, command)] for the SessionStart
+# hook (brain-hook.sh), ours_of(script) the same for any script, all_ours() for all three hooks.
 jq_() {
   python3 -I - "$@" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 A = sys.argv[3:]
-M = "context-discipline/scripts/brain-hook.sh"
-def ours():
+def ours_of(script):
+    M = "context-discipline/scripts/" + script
     return [(ev, e.get("matcher"), h.get("command")) for ev, es in d.get("hooks", {}).items()
             for e in es if isinstance(e, dict) for h in e.get("hooks", []) if M in h.get("command", "")]
+def ours():
+    return ours_of("brain-hook.sh")
+def all_ours():
+    return ours_of("brain-hook.sh") + ours_of("compact-log.sh") + ours_of("ctx-nudge.sh")
 sys.exit(0 if eval(sys.argv[2]) else 1)
+PY
+}
+
+# full_settings <settings.json> <SessionStart command>: a settings.json with all three hooks as the installer
+# writes them, the SessionStart one running the given command.
+full_settings() {
+  python3 -I - "$1" "$2" <<'PY'
+import json, sys
+cmd = lambda s: 'bash "$HOME/.claude/skills/context-discipline/scripts/%s"' % s
+json.dump({"hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2]}]}],
+    "PostCompact": [{"hooks": [{"type": "command", "command": cmd("compact-log.sh")}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd("ctx-nudge.sh"), "timeout": 5}]}]}},
+    open(sys.argv[1], "w"))
 PY
 }
 
@@ -74,12 +93,19 @@ md_lines() { grep -c 'context-discipline' "$1" 2>/dev/null || true; }
 # --- 1. Fresh home: no ~/.claude at all ----------------------------------------------------------------------
 H=$(new_home); C="$H/.claude"
 want='bash "$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh"'   # $HOME is expanded by the shell
+want_cl='bash "$HOME/.claude/skills/context-discipline/scripts/compact-log.sh"'
+want_cn='bash "$HOME/.claude/skills/context-discipline/scripts/ctx-nudge.sh"'
 out=$(inst "$H" 2>&1); rc=$?
 check "fresh: exit 0" [ "$rc" = 0 ]
 check "fresh: skill copied, identical to the repo copy" same_tree "$REPO/context-discipline" "$C/skills/context-discipline"
 check "fresh: scripts are executable" [ -x "$C/skills/context-discipline/scripts/brain-hook.sh" ]
 check "fresh: settings.json has one SessionStart entry, with no matcher (every source), running the hook" \
-  jq_ "$C/settings.json" 'd == {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": A[0]}]}]}}' "$want"
+  jq_ "$C/settings.json" 'd["hooks"]["SessionStart"] == [{"hooks": [{"type": "command", "command": A[0]}]}]' "$want"
+check "fresh: one PostCompact entry, with no matcher (manual and auto), running compact-log.sh" \
+  jq_ "$C/settings.json" 'd["hooks"]["PostCompact"] == [{"hooks": [{"type": "command", "command": A[0]}]}]' "$want_cl"
+check "fresh: one UserPromptSubmit entry running ctx-nudge.sh, with a 5-second timeout" \
+  jq_ "$C/settings.json" 'd["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": A[0], "timeout": 5}]}]' "$want_cn"
+check "fresh: no other hook events or settings keys" jq_ "$C/settings.json" 'list(d) == ["hooks"] and len(d["hooks"]) == 3'
 check "fresh: CLAUDE.md created with the line once" [ "$(md_lines "$C/CLAUDE.md")" = 1 ]
 check "fresh: no backups made (nothing existed)" eval '[ "$(count "$C/*.bak-*")" = 0 ] && [ ! -e "$C/skill-backups" ]'
 check "fresh: summary gives the next steps (/hooks check, init-brain, pipe test)" \
@@ -97,6 +123,18 @@ check "chain: the settings.json command, run from a project subfolder, prints ST
   eval '[ "$rc" = 0 ] && printf "%s" "$hook_out" | grep -q chain-marker-4711'
 check "chain: hook output ends with the 'Project brain loaded from' line" \
   eval 'printf "%s\n" "$hook_out" | tail -n 1 | grep -qF "(Project brain loaded from $P/STATUS.md."'
+cmd_of() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"][sys.argv[2]][0]["hooks"][0]["command"])' "$C/settings.json" "$1"; }
+printf '{"cwd": "%s", "session_id": "chain123", "trigger": "manual", "compact_summary": "chain-summary-4712"}' "$P/src/deep" \
+  | env -u CLAUDE_PROJECT_DIR HOME="$H" bash -c "$(cmd_of PostCompact)"; rc=$?
+check "chain: the PostCompact command saves the summary in the project's .claude/compactions/" \
+  eval '[ "$rc" = 0 ] && grep -rq chain-summary-4712 "$P/.claude/compactions"'
+check "chain: installed init-brain.sh put .claude/compactions/ in the project's .gitignore" grep -qx '.claude/compactions/' "$P/.gitignore"
+printf '%s\n' '{"type":"assistant","isSidechain":false,"uuid":"a","message":{"id":"m","model":"claude-opus-4-6","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":79990}}}' > "$ROOT/chain.jsonl"
+mkdir -p "$ROOT/chain-tmp"
+nudge_out=$(printf '{"cwd": "%s", "session_id": "chain", "transcript_path": "%s"}' "$P/src/deep" "$ROOT/chain.jsonl" \
+  | env -u CLAUDE_PROJECT_DIR -u CD_CTX_WINDOW -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_CONFIG_DIR HOME="$H" TMPDIR="$ROOT/chain-tmp" bash -c "$(cmd_of UserPromptSubmit)"); rc=$?
+check "chain: the UserPromptSubmit command adds the context note at 40%" \
+  eval '[ "$rc" = 0 ] && printf "%s" "$nudge_out" | grep -q "additionalContext" && printf "%s" "$nudge_out" | grep -q "40%"'
 
 # --- 3. Existing settings.json with other keys and another SessionStart hook; existing CLAUDE.md -------------
 H=$(new_home); C="$H/.claude"; mkdir -p "$C"
@@ -135,7 +173,8 @@ check "existing: no temp files left behind" [ "$(count "$C/.settings.json.*")" =
 before=$(tree_sum "$C")
 out=$(inst "$H" 2>&1); rc=$?
 check "twice: exit 0" [ "$rc" = 0 ]
-check "twice: still exactly 1 of our hooks (no duplicates)" jq_ "$C/settings.json" 'len(ours()) == 1'
+check "twice: still exactly 1 of each of our 3 hooks (no duplicates)" \
+  jq_ "$C/settings.json" 'len(ours()) == 1 and len(ours_of("compact-log.sh")) == 1 and len(ours_of("ctx-nudge.sh")) == 1'
 check "twice: CLAUDE.md line still there once" [ "$(md_lines "$C/CLAUDE.md")" = 1 ]
 check "twice: second run changed nothing at all (no new backups either)" [ "$before" = "$(tree_sum "$C")" ]
 check "twice: summary says every step is unchanged" [ "$(printf '%s\n' "$out" | grep -c ': *unchanged')" = 3 ]
@@ -146,6 +185,8 @@ out=$(inst "$H2" --dry-run 2>&1); rc=$?
 check "dry-run (fresh home): exit 0 and ~/.claude is not even created" eval '[ "$rc" = 0 ] && [ ! -e "$H2/.claude" ]'
 check "dry-run (fresh home): prints the three planned changes" \
   eval '[ "$(printf "%s\n" "$out" | grep -c "would ")" = 3 ] && printf "%s" "$out" | grep -qF "runs: bash"'
+names_hooks() { local e; for e in SessionStart PostCompact UserPromptSubmit; do printf '%s' "$out" | grep -q "$e runs: bash" || return 1; done; }
+check "dry-run (fresh home): names all three hooks and the commands they run" names_hooks
 H3=$(new_home); mkdir -p "$H3/.claude"; cp "$ROOT/orig-settings.json" "$H3/.claude/settings.json"; cp "$ROOT/orig-claude.md" "$H3/.claude/CLAUDE.md"
 before=$(tree_sum "$H3")
 out=$(inst "$H3" --dry-run 2>&1); rc=$?
@@ -288,10 +329,7 @@ check "stale hook path: the summary names the missing script, and does not say u
 
 for form in 'bash ~/.claude/skills/context-discipline/scripts/brain-hook.sh' \
             "bash \"$C/skills/context-discipline/scripts/brain-hook.sh\""; do
-  python3 -I - "$C/settings.json" "$form" <<'PY'
-import json, sys
-json.dump({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2]}]}]}}, open(sys.argv[1], "w"))
-PY
+  full_settings "$C/settings.json" "$form"
   out=$(inst "$H14" 2>&1)
   check "working hook command ($form): left as it is" \
     eval 'printf "%s" "$out" | grep -q "settings.json: unchanged" && jq_ "$C/settings.json" "[c for _, _, c in ours()] == [A[0]]" "$form"'
@@ -310,10 +348,7 @@ check "CLAUDE_CONFIG_DIR outside \$HOME: the hook command uses the absolute path
   jq_ "$CD/settings.json" '[c for _, _, c in ours()] == [A[0]]' "bash \"$CD/skills/context-discipline/scripts/brain-hook.sh\""
 
 H18=$(new_home); mkdir -p "$H18/.claude"
-python3 -I - "$H18/.claude/settings.json" "$want" <<'PY'
-import json, sys
-json.dump({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2]}]}]}}, open(sys.argv[1], "w"))
-PY
+full_settings "$H18/.claude/settings.json" "$want"
 out=$(inst "$H18" --dry-run 2>&1)
 check "dry run before the skill is copied: the hook that will run it is not called stale" \
   eval 'printf "%s" "$out" | grep -q "settings.json: unchanged"'
@@ -359,6 +394,75 @@ check "CRLF CLAUDE.md: uninstall gives back the original bytes" cmp -s "$C/CLAUD
 H23=$(new_home); C="$H23/.claude"; mkdir -p "$C"; echo '{"disableAllHooks": true}' > "$C/settings.json"
 out=$(inst "$H23" 2>&1)
 check "disableAllHooks: the summary warns that no hook will run" eval 'printf "%s" "$out" | grep -q "disableAllHooks"'
+
+# --- 17. The PostCompact and UserPromptSubmit hooks: upgrade, repair, matchers, other hooks --------------------------
+H24=$(new_home); C="$H24/.claude"; mkdir -p "$C"
+python3 -I - "$C/settings.json" "$want" <<'PY'
+import json, sys
+json.dump({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2]}]}],
+                     "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo user-prompt-hook"}]}]}},
+          open(sys.argv[1], "w"))
+PY
+out=$(inst "$H24" 2>&1); rc=$?
+check "upgrade from a SessionStart-only install: the two new hooks are added, the SessionStart entry kept" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(all_ours()) == 3 and d[\"hooks\"][\"SessionStart\"] == [{\"hooks\": [{\"type\": \"command\", \"command\": A[0]}]}]" "$want"'
+check "upgrade: the user's own UserPromptSubmit hook is kept" \
+  jq_ "$C/settings.json" 'any(h["command"] == "echo user-prompt-hook" for e in d["hooks"]["UserPromptSubmit"] for h in e["hooks"])'
+check "upgrade: the summary names the added hooks and does not say unchanged" \
+  eval 'printf "%s" "$out" | grep -q "added one PostCompact hook" && printf "%s" "$out" | grep -q "added one UserPromptSubmit hook" && ! printf "%s" "$out" | grep -q "settings.json: unchanged"'
+before=$(tree_sum "$C"); out=$(inst "$H24" 2>&1)
+check "upgrade: a second run changes nothing" eval '[ "$before" = "$(tree_sum "$C")" ] && printf "%s" "$out" | grep -q "settings.json: unchanged"'
+
+H25=$(new_home); C="$H25/.claude"; inst "$H25" >/dev/null 2>&1
+python3 -I - "$C/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["hooks"]["PostCompact"] = [
+    {"matcher": "auto", "hooks": [{"type": "command", "command": "bash ~/.claude/skills/context-discipline/scripts/compact-log.sh"}]},
+    {"hooks": [{"type": "command", "command": 'bash "/no/such/olduser/.claude/skills/context-discipline/scripts/compact-log.sh"'}]}]
+d["hooks"]["UserPromptSubmit"] = [
+    {"hooks": [{"type": "command", "command": 'bash "/no/such/olduser/.claude/skills/context-discipline/scripts/ctx-nudge.sh"'}]}]
+json.dump(d, open(sys.argv[1], "w"))
+PY
+out=$(inst "$H25" 2>&1); rc=$?
+check "PostCompact entry with matcher auto and one with a missing script: replaced by one entry for every compaction" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "[(m, c) for _, m, c in ours_of(\"compact-log.sh\")] == [(None, A[0])]" "$want_cl"'
+check "UserPromptSubmit hook whose script is missing: replaced by the working command" \
+  jq_ "$C/settings.json" '[c for _, _, c in ours_of("ctx-nudge.sh")] == [A[0]]' "$want_cn"
+check "the summary names the missing scripts" eval 'printf "%s" "$out" | grep -q "compact-log.sh, which does not exist" && printf "%s" "$out" | grep -q "ctx-nudge.sh, which does not exist"'
+
+H26=$(new_home); C="$H26/.claude"; mkdir -p "$C"
+python3 -I - "$C/settings.json" <<'PY'
+import json, sys
+json.dump({"hooks": {"UserPromptSubmit": [{"matcher": "deploy", "hooks": [
+    {"type": "command", "command": "bash ~/.claude/skills/context-discipline/scripts/ctx-nudge.sh", "timeout": 9}]}]}},
+    open(sys.argv[1], "w"))
+PY
+inst "$H26" >/dev/null 2>&1
+check "UserPromptSubmit hook already there (a matcher, which that event ignores; own timeout): left as it is" \
+  jq_ "$C/settings.json" 'd["hooks"]["UserPromptSubmit"] == [{"matcher": "deploy", "hooks": [{"type": "command", "command": "bash ~/.claude/skills/context-discipline/scripts/ctx-nudge.sh", "timeout": 9}]}]'
+
+H28=$(new_home); mkdir -p "$H28/.claude"; echo '{"hooks": {"PostCompact": {"oops": 1}}}' > "$H28/.claude/settings.json"
+before=$(tree_sum "$H28"); out=$(inst "$H28" 2>&1); rc=$?
+check "hooks.PostCompact that is not a list: stops with a message, nothing changed" \
+  eval '[ "$rc" != 0 ] && printf "%s" "$out" | grep -q "hooks.PostCompact" && [ "$before" = "$(tree_sum "$H28")" ]'
+
+H27=$(new_home); C="$H27/.claude"; inst "$H27" >/dev/null 2>&1
+python3 -I - "$C/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["hooks"]["PostCompact"].append({"matcher": "manual", "hooks": [{"type": "command", "command": "echo keep-compact"}]})
+d["hooks"]["UserPromptSubmit"][0]["hooks"].append({"type": "command", "command": "echo keep-prompt"})
+json.dump(d, open(sys.argv[1], "w"))
+PY
+out=$(inst "$H27" --uninstall 2>&1); rc=$?
+check "uninstall: all three of our hooks removed, the user's PostCompact and UserPromptSubmit hooks kept" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(all_ours()) == 0 and d == {\"hooks\": {\"PostCompact\": [{\"matcher\": \"manual\", \"hooks\": [{\"type\": \"command\", \"command\": \"echo keep-compact\"}]}], \"UserPromptSubmit\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"echo keep-prompt\"}]}]}}"'
+check "uninstall: the summary counts 3 hook entries" eval 'printf "%s" "$out" | grep -q "removed 3 hook entries"'
+
+out=$(inst "$H27" --help 2>&1)
+check "--help names the PostCompact and UserPromptSubmit hooks" \
+  eval 'printf "%s" "$out" | grep -q PostCompact && printf "%s" "$out" | grep -q UserPromptSubmit'
 
 echo "== install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]
