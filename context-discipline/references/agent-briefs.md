@@ -1,9 +1,15 @@
 # Agent briefs
 
 Copy-ready dispatch prompts. Fill the `<angle-bracket>` slots, keep inputs as paths, and keep the hand-back contract
-and constraints blocks in every brief: they are what keeps the reply small. Choose an agent type that can write files
-(general-purpose, or any type with Write); read-only types such as Explore and Plan cannot save their output. Use the
-model the user's rules name for subagents.
+and constraints blocks in every brief: they keep the reply small.
+
+Agent type: one that can write files (general-purpose, or a custom type with Write). Explore and Plan are read-only
+and skip CLAUDE.md. A `fork` starts with this whole conversation;
+use it only for side tasks that need it. A custom agent with `omitClaudeMd: true` gets only its brief. To run every
+subagent on one model without naming it each time, the user can set `CLAUDE_CODE_SUBAGENT_MODEL`.
+
+A design runs through these briefs in order: context brief → questions to the user, answers in a decisions file →
+spec drafter → the user reviews the spec file → plan drafter → one implementer per task → reviewer.
 
 Contents: hand-back contract · constraints · research/survey · context brief · spec drafter · plan drafter ·
 implementer · reviewer · fact-checker/verifier.
@@ -22,10 +28,14 @@ The file is the deliverable itself (survey, review, brief, draft). A summary of 
 not in a separate file; if any write is refused, still reply within 15 lines and name the refused path.
 ```
 
-Why the last two lines: Claude Code refuses some subagent writes that look like a report about the agent's own
-work ("Subagents should return findings as text, not write report files"), while deliverables such as a survey,
-review or spec draft write fine. An agent that hits the refusal tends to paste its whole report into the reply,
-which is exactly the cost the contract exists to avoid.
+Name `<OUTPUT_PATH>` by date and topic (`reviews/2026-03-14-auth-review.md`), never starting with REPORT, SUMMARY,
+FINDINGS or ANALYSIS. Observed in Claude Code 2.1.29x and not documented: the Write tool refuses a subagent's write
+when the file name matches `^(REPORT|SUMMARY|FINDINGS|ANALYSIS).*\.md$` in any case ("Subagents should return
+findings as text, not write report files"). The check reads the name only: `findings.md` is refused even as a
+deliverable, while `task-3-report.md` writes fine; Edit and shell redirects are not checked. Every subagent's system
+prompt also tells it to return findings as text rather than write report files, which is why the contract asks for
+the file explicitly. An agent that hits the refusal tends to paste its whole output into the reply, the cost the
+contract exists to avoid. The check can change in any release.
 
 ## Constraints (paste and adjust)
 
@@ -118,8 +128,7 @@ Output file <OUTPUT_PATH>. Hand back the task count, the riskiest task, and any 
 You are implementing task <N> of the plan <PATH> ("<task title>").
 
 Inputs: plan <PATH> (read only task <N> and anything it references), spec <PATH>, <PATH to a review file if this
-is a fix round>. If the superpowers subagent-driven-development skill is available, follow its implementer
-process (test first, small commits, self-review).
+is a fix round>. Write the test first, commit in small steps, and review your own diff before handing back.
 
 Task: implement task <N> exactly as written; on a fix round, fix every Critical and Important item in the review.
 Run the tests named in the plan.
@@ -150,6 +159,9 @@ Hand back the verdict and Critical/Important items as one-liners with file:line;
 <HAND-BACK CONTRACT>
 <CONSTRAINTS>
 ```
+
+A fix round goes back to the implementer as the review's path. Resuming the same implementer with `SendMessage`
+keeps its history and warm cache; a new dispatch needs the plan, spec and review paths.
 
 ## Fact-checker / verifier
 

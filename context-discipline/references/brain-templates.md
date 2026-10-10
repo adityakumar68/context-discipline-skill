@@ -1,22 +1,26 @@
 # Brain templates
 
-Copy-ready templates for the files a long project keeps outside the agent's context. `scripts/init-brain.sh` copies
-the STATUS and overview templates below (the fenced blocks after the `template:` markers) and fills `{{PROJECT}}` and
-`{{DATE}}`; edit the markers and the script reads the new version.
+Copy-ready templates for the files a long project keeps outside the agent's context.
+`${CLAUDE_SKILL_DIR}/scripts/init-brain.sh` (`${CLAUDE_SKILL_DIR}` is this skill's folder) copies the STATUS and
+overview templates below (the fenced blocks after the `template:` markers) and fills `{{PROJECT}}` and `{{DATE}}`;
+edit the blocks and the script uses the new version. It also writes the `.claude/brain` pointer and adds
+`.claude/compactions/` to the project's `.gitignore`.
 
-Contents: STATUS.md · overview doc · decisions file · handoff note · memory file · what goes where.
+Contents: STATUS.md · overview doc · decisions file · handoff note · Compact instructions · memory file · what goes
+where.
 
 ## STATUS.md
 
-The current state, re-injected into context on every startup, resume, clear and compact. Keep it under 10,000 chars
-(`wc -c STATUS.md`): hook output over that becomes a 2,000-char preview. Rewrite sections in place instead of
-appending; history belongs in the overview's decision log and in git.
+The current state, injected into context on every startup, resume, `/clear`, compaction and fork. Keep it under
+9,000 characters (`wc -m STATUS.md`): the hook shows only the first 9,000 characters of a longer file, then a trim
+notice. Rewrite sections in place instead of appending; history belongs in the overview's decision log and in git.
+Write it as facts ("Run 3 is on GPU 2"), not as orders to the model.
 
 <!-- template:status -->
 ~~~markdown
 # {{PROJECT}} — STATUS
 
-_Last updated: {{DATE}}. Rewrite in place; keep under 10,000 chars (`wc -c`)._
+_Last updated: {{DATE}}. Rewrite in place; keep under 9,000 characters (`wc -m`)._
 
 ## Pitch
 One or two sentences: what this project makes and why it matters.
@@ -139,6 +143,24 @@ Done: <what is finished and verified, with commit hashes>. Not done: <what is le
 - <gotcha discovered this session>
 ```
 
+## Compact instructions (a section of the project-root `CLAUDE.md`)
+
+Claude Code's docs ("Manage context proactively" on the costs page) say a `# Compact instructions` section in the
+project-root CLAUDE.md customizes what compaction keeps; `/compact <focus>` does the same for one compaction. Name
+what the conversation holds and the files do not; STATUS and other files on disk survive anyway.
+
+```markdown
+# Compact instructions
+
+When summarizing this conversation, keep:
+- The STATUS path (STATUS.md) and the current decisions file, plus the ids of decisions made this session
+  (for example D4, D7) with one line each.
+- The current hypothesis or approach, and what has been tried and ruled out.
+- The files in progress: what is done and what is left in each.
+- Failing tests or commands: the exact name and the last error line.
+- The next step.
+```
+
 ## Memory file
 
 Memory holds facts that are true across sessions and cannot be derived from the repo: who the user is, feedback with
@@ -154,8 +176,7 @@ metadata:
 
 Subagents write their full report to a file and hand back at most ~15 lines (status, verdict, serious issues, path).
 
-**Why:** in one long session, subagent hand-backs were 15% of everything the main agent read, and the main context
-compacted five times.
+**Why:** pasted reports filled the main context and brought compactions early.
 
 **How to apply:** every dispatch ends with the hand-back contract from the context-discipline skill; when a report
 arrives longer than ~15 lines, ask for the file path instead of reading on.
@@ -165,6 +186,23 @@ Memory types: `user` (role, goals, preferences), `feedback` (a correction or con
 **How to apply:**), `project` (facts about the work not visible in the repo), `reference` (where something lives).
 
 ## What goes where
+
+Each home has one job; information in the wrong one either bloats every session or goes stale.
+
+| Home | Holds | Keep out |
+|---|---|---|
+| Global `~/.claude/CLAUDE.md` | Stable cross-project rules, a few lines, pointers to skills | Project detail, procedures |
+| Project `CLAUDE.md` / `AGENTS.md` | Project rules, build and test commands, conventions, Compact instructions | Current state, history |
+| Memory files | Facts about the user; feedback with its **Why**; project facts not derivable from the repo; pointers | Procedures; state that changes daily |
+| `STATUS.md` | Current state, under 9,000 characters, injected each session | History |
+| Overview doc | Big picture, dated decision log, metrics, where everything lives | Today's to-do list |
+| Skills | Procedures reused across projects | Project facts |
+| Project files | Specs, plans, decisions files, notes, handoffs, agent outputs and reviews | Secrets |
+
+Secrets go in none of these: every one is read into context or committed. Read them at run time from an env var, an
+askpass helper or a password manager.
+
+Examples:
 
 | Information | Home | Why there |
 |---|---|---|
