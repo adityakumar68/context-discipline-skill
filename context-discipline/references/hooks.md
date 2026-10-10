@@ -84,7 +84,8 @@ instructions can trigger its prompt-injection defenses.
 ## Install (edits global settings: ask the user first)
 
 Preferred: `./install.sh` from the repo (`--dry-run` shows every change). By hand, copy the skill folder to
-`~/.claude/skills/` and merge into `~/.claude/settings.json`:
+`~/.claude/skills/` and merge into `~/.claude/settings.json` (with `CLAUDE_CONFIG_DIR` set, use that folder instead
+of `~/.claude` throughout):
 
 ```json
 {
@@ -128,7 +129,7 @@ echo '{"cwd": "'"$P"'", "session_id": "nudge-'$RANDOM'", "transcript_path": "'"$
 
 | Symptom | Check |
 |---|---|
-| Nothing injected | `grep -n context-discipline/scripts ~/.claude/settings.json`; does the pipe test print? Is the pointer at `<project>/.claude/brain`, naming an existing file by a relative path? Is the project a subfolder of `$HOME` rather than `$HOME` itself? |
+| Nothing injected | `grep -n context-discipline/scripts "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"`; does the pipe test print? Is the pointer at `<project>/.claude/brain`, naming an existing file by a relative path? Is the project folder something other than `$HOME` itself (or `/`)? Is `CD_HOOKS=off` set? |
 | `(Project brain not loaded: ...)` | The pointer was refused; the line gives the reason. Use a relative path to a text file inside the project. |
 | Wrong STATUS injected | The nearest pointer wins: a nested project's `.claude/brain` shadows its parent's. |
 | Trim notice in context | STATUS is over 9,000 characters: move history to the overview's decision log. |

@@ -285,8 +285,8 @@ baseline arm.
 **The hook does not seem to fire.** Check `/hooks`; restart Claude Code only if the hook is missing. Then run the
 Verify command. If it prints `(Project brain not loaded: ...)`, the pointer was refused and the line says why. If it
 prints nothing, check that `<project>/.claude/brain` exists and its first non-comment line names an existing file by
-a relative path. The walk stops before `$HOME`, so a project must be a subfolder of your home, not the home folder
-itself.
+a relative path. The walk stops before `$HOME` and `/`, so the project folder can be anywhere except your home
+folder itself (or `/`): a pointer there is never used.
 
 **STATUS got cut off.** Claude Code replaces hook output over 10,000 characters with a file path and a
 2,000-character preview. So the hook prints at most the first 9,000 characters of STATUS, followed by a line asking

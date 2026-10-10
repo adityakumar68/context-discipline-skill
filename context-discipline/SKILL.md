@@ -37,7 +37,7 @@ Three global hooks (details and manual setup in `references/hooks.md`): SessionS
 nearest `.claude/brain` above the session's folder (startup, resume, `/clear`, compaction, fork). In brain projects,
 PostCompact saves each compaction summary to `<root>/.claude/compactions/`, and UserPromptSubmit adds a
 context-check note at 40% of the window and every 15% after. Check with
-`grep -c context-discipline/scripts ~/.claude/settings.json` (3 when all are in). If missing, offer to install them
+`grep -c context-discipline/scripts "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"` (3 when all are in). If missing, offer to install them
 (global settings: ask first); meanwhile read STATUS yourself.
 
 Known risk: a cloned repo that ships a `.claude/brain` gets its STATUS injected, as its CLAUDE.md is loaded. Treat
