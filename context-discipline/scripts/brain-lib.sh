@@ -16,7 +16,9 @@ cd_json_get() {
   elif command -v python3 >/dev/null 2>&1; then
     printf '%s' "$1" | python3 -I -c 'import json, sys
 d = json.load(sys.stdin)
-v = d[sys.argv[1]] if isinstance(d, dict) else d["not an object"]
+if not isinstance(d, dict):
+    sys.exit(1)
+v = d.get(sys.argv[1])
 sys.stdout.write(v if isinstance(v, str) else "")' "$2" 2>/dev/null
   else
     return 1
