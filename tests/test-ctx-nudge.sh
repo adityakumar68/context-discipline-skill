@@ -90,7 +90,8 @@ for k in ("session_id", "transcript_path"):
     if d[k] == "-": del d[k]
 print(json.dumps(d))' "$cwd" "$tp" "$sid")
   out=$(printf '%s' "$in" | env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u CD_CTX_WINDOW \
-    -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_CODE_DISABLE_1M_CONTEXT HOME="$HM" TMPDIR="$TS" "$@" bash "$N" 2>&1)
+    -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_CODE_DISABLE_1M_CONTEXT HOME="$HM" TMPDIR="$TS" "$@" \
+    perl -e 'alarm shift; exec @ARGV' 10 bash "$N" 2>&1)    # a hung hook is killed after 10 s (rc 142)
   rc=$?
 }
 # note: the additionalContext of the last run ("" if none, or if the output is not the expected JSON).
@@ -212,6 +213,20 @@ echo '{"autoCompactWindow": ' > "$HM/.claude/settings.json"
 gen "$TR/w" a:400000:claude-opus-5-5; run "$P" "$TR/w" "sess-$((++k))"
 check "unreadable settings.json is skipped (model window)" eval 'nudged "40%" && has "$(note)" "1,000,000"'
 rm -f "$HM/.claude/settings.json"
+# A hostile project must not be able to hang the hook or exhaust memory through its settings files: only
+# regular files up to 1 MB are read. (A settings.json symlinked to /dev/zero once made an unguarded version
+# allocate memory until the machine froze; the FIFO case below takes the same "not a regular file" path
+# without that risk, so /dev/zero itself is deliberately not used here.)
+mkfifo "$P/.claude/settings.json"
+gen "$TR/w" a:400000:claude-opus-5-5; run "$P" "$TR/w" "sess-$((++k))"
+check "project settings.json that is a FIFO is skipped, no hang (model window)" \
+  eval 'nudged "40%" && has "$(note)" "1,000,000"'
+rm -f "$P/.claude/settings.json"
+python3 -I -c 'import sys; open(sys.argv[1], "w").write("{\"autoCompactWindow\": 500000}" + " " * 2000000)' \
+  "$P/.claude/settings.json"
+gen "$TR/w" a:400000:claude-opus-5-5; run "$P" "$TR/w" "sess-$((++k))"
+check "project settings.json over 1 MB is skipped (model window)" eval 'nudged "40%" && has "$(note)" "1,000,000"'
+rm -f "$P/.claude/settings.json"
 
 # model windows (no window configured anywhere)
 for m in claude-opus-5-5 claude-opus-4-7 claude-sonnet-5 claude-haiku-5-5 claude-fable-5-1 us.anthropic.claude-opus-4-8-v1:0; do

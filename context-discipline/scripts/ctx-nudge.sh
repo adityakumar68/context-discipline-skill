@@ -50,6 +50,35 @@ TAIL, MAX_TAIL = 256 * 1024, 16 * 1024 * 1024
 FIRST, STEP = 40, 15                       # first note at 40% of the window, then every further 15%
 SMALL, LARGE, FLOOR = 200_000, 1_000_000, 100_000
 CONTEXT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+JSON_CAP = 1_000_000   # bytes; settings or state files larger than this are skipped
+
+
+def read_json(path, cap=JSON_CAP):
+    """Parse path as JSON only if it is a regular file of at most cap bytes; otherwise (or on any error) None.
+    Opened non-blocking and re-checked on the open descriptor, so a FIFO, a device such as /dev/zero, or a huge
+    file in a hostile project can neither hang this hook nor exhaust memory."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > cap:
+            return None
+        chunks, n = [], 0
+        while n <= cap:
+            b = os.read(fd, cap + 1 - n)
+            if not b:
+                break
+            chunks.append(b)
+            n += len(b)
+        if n > cap:
+            return None
+        return json.loads(b"".join(chunks).decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    finally:
+        os.close(fd)
 
 
 def num(x):
@@ -143,11 +172,7 @@ def settings_window(keys, project):
         files += [os.path.join(project, ".claude", n) for n in ("settings.local.json", "settings.json")]
     files.append(os.path.join(user, "settings.json"))
     for p in files:
-        try:
-            with open(p, encoding="utf-8") as fh:
-                d = json.load(fh)
-        except (OSError, ValueError):
-            continue
+        d = read_json(p)
         if not isinstance(d, dict):
             continue
         ms = d.get("modelSettings") if isinstance(d.get("modelSettings"), dict) else {}
@@ -221,12 +246,8 @@ def main():
     if not isinstance(sid, str) or not sid:
         sid = os.path.basename(path)
     sfile = os.path.join(folder, "nudge-" + re.sub(r"[^A-Za-z0-9_.-]", "_", sid)[:120])
-    try:
-        with open(sfile, encoding="utf-8") as fh:
-            state = json.load(fh)
-        if not isinstance(state, dict):
-            state = {}
-    except (OSError, ValueError):
+    state = read_json(sfile)
+    if not isinstance(state, dict):
         state = {}
     old = dict(state)
     step = state.get("step") if isinstance(state.get("step"), int) else -1
@@ -269,5 +290,6 @@ except Exception:
     pass
 PY
 
-printf '%s' "$input" | CD_REL="$CD_REL" python3 -I -c "$measure" 2>/dev/null
-exit 0
+# exec, so a hook timeout (or any kill) reaches python itself instead of leaving it orphaned. The script ends in
+# try/except, so it always exits 0.
+CD_REL="$CD_REL" exec python3 -I -c "$measure" 2>/dev/null <<<"$input"
