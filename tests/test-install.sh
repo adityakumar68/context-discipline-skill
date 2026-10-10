@@ -78,8 +78,8 @@ out=$(inst "$H" 2>&1); rc=$?
 check "fresh: exit 0" [ "$rc" = 0 ]
 check "fresh: skill copied, identical to the repo copy" same_tree "$REPO/context-discipline" "$C/skills/context-discipline"
 check "fresh: scripts are executable" [ -x "$C/skills/context-discipline/scripts/brain-hook.sh" ]
-check "fresh: settings.json has exactly 4 hooks (startup, resume, clear, compact) with the absolute command" \
-  jq_ "$C/settings.json" 'sorted(m for _, m, _ in ours()) == ["clear", "compact", "resume", "startup"] and {c for _, _, c in ours()} == {A[0]} and set(d) == {"hooks"}' "$want"
+check "fresh: settings.json has one SessionStart entry, with no matcher (every source), running the hook" \
+  jq_ "$C/settings.json" 'd == {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": A[0]}]}]}}' "$want"
 check "fresh: CLAUDE.md created with the line once" [ "$(md_lines "$C/CLAUDE.md")" = 1 ]
 check "fresh: no backups made (nothing existed)" eval '[ "$(count "$C/*.bak-*")" = 0 ] && [ ! -e "$C/skill-backups" ]'
 check "fresh: summary gives the next steps (restart, init-brain, pipe test)" \
@@ -90,7 +90,7 @@ P="$H/work/notes-app"; mkdir -p "$P/src/deep"
 inst_out=$(bash "$C/skills/context-discipline/scripts/init-brain.sh" "$P"); rc=$?
 check "chain: installed init-brain.sh sets up the brain" eval '[ "$rc" = 0 ] && [ -f "$P/STATUS.md" ] && [ -f "$P/.claude/brain" ]'
 echo "chain-marker-4711" >> "$P/STATUS.md"
-cmd=$(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print([h["command"] for e in d["hooks"]["SessionStart"] if e["matcher"]=="compact" for h in e["hooks"]][0])' "$C/settings.json")
+cmd=$(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print([h["command"] for e in d["hooks"]["SessionStart"] if "matcher" not in e for h in e["hooks"]][0])' "$C/settings.json")
 hook_out=$(printf '{"cwd": "%s", "source": "compact"}' "$P/src/deep" | HOME="$H" bash -c "$cmd"); rc=$?
 check "chain: the settings.json command, run from a project subfolder, prints STATUS" \
   eval '[ "$rc" = 0 ] && printf "%s" "$hook_out" | grep -q chain-marker-4711'
@@ -121,7 +121,7 @@ check "existing: statusLine, enabledPlugins and PreToolUse kept as they were" \
   jq_ "$C/settings.json" 'd["statusLine"] == {"type": "command", "command": "echo my-status"} and d["enabledPlugins"] == {"example-plugin@example-market": True} and d["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo pre-tool"}]}]'
 check "existing: the other SessionStart hook is still there" \
   jq_ "$C/settings.json" 'any(h["command"] == "echo other-startup-hook" for e in d["hooks"]["SessionStart"] for h in e["hooks"])'
-check "existing: our 4 hooks added" jq_ "$C/settings.json" 'sorted(m for _, m, _ in ours()) == ["clear", "compact", "resume", "startup"]'
+check "existing: our hook added once, in an entry with no matcher" jq_ "$C/settings.json" '[m for _, m, _ in ours()] == [None]'
 check "existing: settings.json backed up first (backup equals the original)" \
   eval '[ "$(count "$C/settings.json.bak-*")" = 1 ] && cmp -s "$C"/settings.json.bak-* "$ROOT/orig-settings.json"'
 check "existing: CLAUDE.md backed up first (backup equals the original)" \
@@ -134,7 +134,7 @@ check "existing: no temp files left behind" [ "$(count "$C/.settings.json.*")" =
 before=$(tree_sum "$C")
 out=$(inst "$H" 2>&1); rc=$?
 check "twice: exit 0" [ "$rc" = 0 ]
-check "twice: still exactly 4 of our hooks (no duplicates)" jq_ "$C/settings.json" 'len(ours()) == 4'
+check "twice: still exactly 1 of our hooks (no duplicates)" jq_ "$C/settings.json" 'len(ours()) == 1'
 check "twice: CLAUDE.md line still there once" [ "$(md_lines "$C/CLAUDE.md")" = 1 ]
 check "twice: second run changed nothing at all (no new backups either)" [ "$before" = "$(tree_sum "$C")" ]
 check "twice: summary says every step is unchanged" [ "$(printf '%s\n' "$out" | grep -c ': *unchanged')" = 3 ]
@@ -144,7 +144,7 @@ H2=$(new_home)
 out=$(inst "$H2" --dry-run 2>&1); rc=$?
 check "dry-run (fresh home): exit 0 and ~/.claude is not even created" eval '[ "$rc" = 0 ] && [ ! -e "$H2/.claude" ]'
 check "dry-run (fresh home): prints the three planned changes" \
-  eval '[ "$(printf "%s\n" "$out" | grep -c "would ")" = 3 ] && printf "%s" "$out" | grep -qF "each runs: bash"'
+  eval '[ "$(printf "%s\n" "$out" | grep -c "would ")" = 3 ] && printf "%s" "$out" | grep -qF "runs: bash"'
 H3=$(new_home); mkdir -p "$H3/.claude"; cp "$ROOT/orig-settings.json" "$H3/.claude/settings.json"; cp "$ROOT/orig-claude.md" "$H3/.claude/CLAUDE.md"
 before=$(tree_sum "$H3")
 out=$(inst "$H3" --dry-run 2>&1); rc=$?
@@ -179,7 +179,7 @@ check "invalid JSON: --uninstall also aborts with no change" eval '[ "$rc" != 0 
 H6=$(new_home)
 inst "$H6" --skip-claude-md >/dev/null 2>&1; rc=$?
 check "--skip-claude-md: skill and hook installed, no CLAUDE.md" \
-  eval '[ "$rc" = 0 ] && [ -d "$H6/.claude/skills/context-discipline" ] && [ ! -e "$H6/.claude/CLAUDE.md" ] && jq_ "$H6/.claude/settings.json" "len(ours()) == 4"'
+  eval '[ "$rc" = 0 ] && [ -d "$H6/.claude/skills/context-discipline" ] && [ ! -e "$H6/.claude/CLAUDE.md" ] && jq_ "$H6/.claude/settings.json" "len(ours()) == 1"'
 H7=$(new_home); CD="$H7/custom config"
 env HOME="$H7" CLAUDE_CONFIG_DIR="$CD" bash "$INSTALL" >/dev/null 2>&1; rc=$?
 check "CLAUDE_CONFIG_DIR (with a space): installs there, not in ~/.claude" \
@@ -200,7 +200,7 @@ inst "$H8" >/dev/null 2>&1; rc=$?
 check "update: installed copy refreshed to match the repo" eval '[ "$rc" = 0 ] && same_tree "$REPO/context-discipline" "$C/skills/context-discipline"'
 check "update: old copy kept in skill-backups/, and skills/ holds only the live skill" \
   eval '[ "$(count "$C/skill-backups/context-discipline.bak-*")" = 1 ] && grep -q "local edit" "$C"/skill-backups/context-discipline.bak-*/SKILL.md && [ "$(ls "$C/skills")" = context-discipline ]'
-check "update: hook and CLAUDE.md steps were no-ops" eval 'jq_ "$C/settings.json" "len(ours()) == 4" && [ "$(md_lines "$C/CLAUDE.md")" = 1 ]'
+check "update: hook and CLAUDE.md steps were no-ops" eval 'jq_ "$C/settings.json" "len(ours()) == 1" && [ "$(md_lines "$C/CLAUDE.md")" = 1 ]'
 echo "another edit" >> "$C/skills/context-discipline/SKILL.md"
 inst "$H8" --uninstall >/dev/null 2>&1
 check "uninstall: a locally changed copy is moved to skill-backups/, not deleted" \
@@ -217,8 +217,8 @@ EOF
 printf -- '- Follow my own `context-discipline` rule.\n' > "$C/CLAUDE.md"
 cp "$C/CLAUDE.md" "$ROOT/manual-claude.md"
 out=$(inst "$H9" 2>&1); rc=$?
-check "manual install: only the missing matcher (compact) is added" \
-  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(ours()) == 3 and [m for _, m, _ in ours()] == [\"startup|resume\", \"clear\", \"compact\"]"'
+check "manual install: its matcher entries are replaced by one entry for every source" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "[m for _, m, _ in ours()] == [None] and len(d[\"hooks\"][\"SessionStart\"]) == 1"'
 check "manual install: a CLAUDE.md that already mentions context-discipline is left alone" cmp -s "$C/CLAUDE.md" "$ROOT/manual-claude.md"
 
 # --- 11. A symlinked settings.json stays a symlink -----------------------------------------------------------------
@@ -226,7 +226,51 @@ H10=$(new_home); C="$H10/.claude"; mkdir -p "$C" "$H10/dotfiles"
 echo '{"theme": "dark"}' > "$H10/dotfiles/settings.json"; ln -s "$H10/dotfiles/settings.json" "$C/settings.json"
 inst "$H10" >/dev/null 2>&1; rc=$?
 check "symlinked settings.json: still a symlink, and its target got the hooks" \
-  eval '[ "$rc" = 0 ] && [ -L "$C/settings.json" ] && jq_ "$H10/dotfiles/settings.json" "len(ours()) == 4 and d[\"theme\"] == \"dark\""'
+  eval '[ "$rc" = 0 ] && [ -L "$C/settings.json" ] && jq_ "$H10/dotfiles/settings.json" "len(ours()) == 1 and d[\"theme\"] == \"dark\""'
+
+# --- 12. Upgrading the old four-entry install, and other matcher forms -------------------------------------------
+H11=$(new_home); C="$H11/.claude"; inst "$H11" >/dev/null 2>&1
+old_cmd="bash \"$C/skills/context-discipline/scripts/brain-hook.sh\""
+python3 -I - "$C/settings.json" "$old_cmd" <<'PY'
+import json, sys
+hook = {"type": "command", "command": sys.argv[2]}
+ss = [{"matcher": m, "hooks": [dict(hook)]} for m in ("startup", "resume", "clear", "compact")]
+ss[0]["hooks"].insert(0, {"type": "command", "command": "echo user-startup"})
+json.dump({"hooks": {"SessionStart": ss}}, open(sys.argv[1], "w"))
+PY
+out=$(inst "$H11" 2>&1); rc=$?
+check "upgrade from four matcher entries: one entry for every source, no duplicates" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "[m for _, m, _ in ours()] == [None]"'
+check "upgrade: the user's hook in the old startup entry is kept there" \
+  jq_ "$C/settings.json" 'd["hooks"]["SessionStart"][0] == {"matcher": "startup", "hooks": [{"type": "command", "command": "echo user-startup"}]} and len(d["hooks"]["SessionStart"]) == 2'
+check "upgrade: the summary says what was replaced" eval 'printf "%s" "$out" | grep -q "replaced 4 old SessionStart hook entries"'
+before=$(tree_sum "$C"); out=$(inst "$H11" 2>&1)
+check "upgrade: a second run changes nothing" eval '[ "$before" = "$(tree_sum "$C")" ] && printf "%s" "$out" | grep -q "settings.json: unchanged"'
+
+H12=$(new_home); C="$H12/.claude"; mkdir -p "$C"
+cat > "$C/settings.json" <<'JSON'
+{"hooks": {"SessionStart": [
+  {"matcher": ".*", "hooks": [{"type": "command", "command": "bash ~/.claude/skills/context-discipline/scripts/brain-hook.sh"}]},
+  {"matcher": "^(startup|resume|clear|compact)$", "hooks": [{"type": "command", "command": "bash ~/.claude/skills/context-discipline/scripts/brain-hook.sh"}]}
+]}}
+JSON
+inst "$H12" >/dev/null 2>&1; rc=$?
+check "regex matchers (.*, ^(a|b)\$): replaced by one entry, no duplicates" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "[m for _, m, _ in ours()] == [None] and len(d[\"hooks\"][\"SessionStart\"]) == 1"'
+
+# --- 13. Uninstall removes both the old and the new form ---------------------------------------------------------
+H13=$(new_home); C="$H13/.claude"; inst "$H13" >/dev/null 2>&1
+python3 -I - "$C/settings.json" "$old_cmd" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+hook = {"type": "command", "command": sys.argv[2]}
+d["hooks"]["SessionStart"] += [{"matcher": m, "hooks": [dict(hook)]} for m in ("startup", "resume", "clear", "compact")]
+d["hooks"]["SessionStart"].append({"matcher": "startup", "hooks": [{"type": "command", "command": "echo keep-me"}]})
+json.dump(d, open(sys.argv[1], "w"))
+PY
+inst "$H13" --uninstall >/dev/null 2>&1; rc=$?
+check "uninstall: removes the one-entry form and old matcher entries, keeps other hooks" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(ours()) == 0 and d == {\"hooks\": {\"SessionStart\": [{\"matcher\": \"startup\", \"hooks\": [{\"type\": \"command\", \"command\": \"echo keep-me\"}]}]}}"'
 
 echo "== install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

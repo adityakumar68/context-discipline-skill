@@ -20,8 +20,9 @@ Usage: ./install.sh [--dry-run] [--uninstall] [--skip-claude-md] [-h|--help]
 Installs the context-discipline skill for Claude Code into $CLAUDE_CONFIG_DIR, or ~/.claude if that is unset:
   1. Skill:     copies context-discipline/ to <dir>/skills/context-discipline/
                 (an existing copy that differs is first moved to <dir>/skill-backups/)
-  2. Hook:      adds SessionStart hooks (startup, resume, clear, compact) that run
-                skills/context-discipline/scripts/brain-hook.sh, to <dir>/settings.json
+  2. Hook:      adds one SessionStart hook with no matcher, so it fires for every source (startup,
+                resume, clear, compact, fork), running skills/context-discipline/scripts/brain-hook.sh,
+                to <dir>/settings.json (older entries for the same hook are replaced)
   3. CLAUDE.md: appends one line telling Claude when to follow the skill
 settings.json and CLAUDE.md are backed up to <file>.bak-<timestamp> before they are changed.
 Steps that are already done are skipped, so running it again is safe. To update: git pull && ./install.sh
@@ -78,7 +79,7 @@ helper() {
 import filecmp, json, os, shutil, sys, tempfile
 
 MARKER = "context-discipline/scripts/brain-hook.sh"
-MATCHERS = ("startup", "resume", "clear", "compact")
+SOURCES = "startup, resume, clear, compact, fork"   # what an entry with no matcher fires on (fork since 2.1.214)
 IGNORE = {"__pycache__", ".DS_Store"}
 
 
@@ -168,14 +169,51 @@ def is_ours(h):
     return isinstance(h, dict) and isinstance(h.get("command"), str) and MARKER in h["command"]
 
 
-def covers(matcher, name):
-    """Does a SessionStart entry with this matcher fire for source `name`?"""
-    if matcher is None:
-        return True
-    if not isinstance(matcher, str):
-        return False
-    m = matcher.strip()
-    return m in ("", "*") or name in [p.strip() for p in m.split("|")]
+def covers_all(matcher):
+    """Does a SessionStart entry with this matcher fire for every source, including ones added later?"""
+    return matcher is None or (isinstance(matcher, str) and matcher.strip() in ("", "*"))
+
+
+def label(entry):
+    m = entry.get("matcher")
+    return "no matcher" if m is None else (m or '""')
+
+
+def plan_install(data, command):
+    """Edit data so hooks.SessionStart holds exactly one of our hooks, in an entry with no matcher (every source).
+    Returns ((verb, rest) describing the change, whether a new entry was added), or (None, False) if it holds."""
+    hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
+    entries = hooks.get("SessionStart", [])
+    ours = [(e, h) for e in entries if isinstance(e, dict) for h in hooks_of(e) if is_ours(h)]
+    keep = next((h for e, h in ours if covers_all(e.get("matcher"))), None)
+    if keep is not None and len(ours) == 1:
+        return None, False
+    removed, kept_entries = [], []
+    for e in entries:
+        if not (isinstance(e, dict) and any(is_ours(h) for h in hooks_of(e))):
+            kept_entries.append(e)
+            continue
+        rest = [h for h in e["hooks"] if h is keep or not is_ours(h)]
+        removed += [label(e)] * (len(e["hooks"]) - len(rest))
+        if rest:
+            e["hooks"] = rest
+            kept_entries.append(e)
+    if keep is None:
+        kept_entries.append({"hooks": [{"type": "command", "command": command}]})
+    data.setdefault("hooks", {})["SessionStart"] = kept_entries
+    n = len(removed)
+    old = f"{n} old SessionStart hook {'entry' if n == 1 else 'entries'} ({', '.join(removed)})"
+    if keep is not None:
+        return ("remove", f"{old}; the entry for every source stays"), False
+    if removed:
+        return ("replace", f"{old} with one for every source ({SOURCES})"), True
+    return ("add", f"one SessionStart hook for every source ({SOURCES})"), True
+
+
+def said(change, dry):
+    """('add', 'x') -> 'added x', or 'would add x' in a dry run."""
+    verb, rest = change
+    return f"would {verb} {rest}" if dry == "1" else f"{verb.rstrip('e')}ed {rest}"
 
 
 def dump(data):
@@ -189,33 +227,19 @@ def cmd_check(path):
 def cmd_settings_install(path, hook_path, ts, dry):
     exists, data = load_settings(path)
     command = "bash " + dq(hook_path)
-    hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
-    entries = hooks.get("SessionStart", [])
-    present = [n for n in MATCHERS
-               if any(covers(e.get("matcher"), n) and any(is_ours(h) for h in hooks_of(e)) for e in entries)]
-    missing = [n for n in MATCHERS if n not in present]
-    if not missing:
-        print(f"settings.json: unchanged, the hook is already there ({', '.join(present)})")
+    what, added = plan_install(data, command)
+    if what is None:
+        print("settings.json: unchanged, the hook is already there (one SessionStart entry, every source)")
         return
-    note = f" (already there: {', '.join(present)})" if present else ""
     if dry == "1":
         where = f"backup first to {path}.bak-{ts}" if exists else f"new file {path}"
-        print(f"settings.json: would add SessionStart hooks for {', '.join(missing)}{note}; {where}")
-        print(f"               each runs: {command}")
+        print(f"settings.json: {said(what, dry)}; {where}")
+        if added:
+            print(f"               the hook runs: {command}")
         return
-    hooks = data.setdefault("hooks", {})
-    entries = hooks.setdefault("SessionStart", [])
-    for name in missing:
-        hook = {"type": "command", "command": command}
-        same = next((e for e in entries if isinstance(e, dict) and e.get("matcher") == name
-                     and isinstance(e.get("hooks"), list)), None)
-        if same is not None:
-            same["hooks"].append(hook)
-        else:
-            entries.append({"matcher": name, "hooks": [hook]})
     saved = f"; backup: {backup(path, ts)}" if exists else "; created the file"
     write_atomic(path, dump(data))
-    print(f"settings.json: added SessionStart hooks for {', '.join(missing)}{note}{saved}")
+    print(f"settings.json: {said(what, dry)}{saved}")
 
 
 def cmd_settings_uninstall(path, ts, dry):
