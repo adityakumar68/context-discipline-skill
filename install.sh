@@ -140,7 +140,7 @@ def write_atomic(path, text):
         mode = 0o666 & ~umask
     fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(real) + ".", suffix=".tmp", dir=folder)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
@@ -254,11 +254,42 @@ def dump(data):
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
-def cmd_check(path):
-    load_settings(path)
+def need_writable(path):
+    """Stop now if writing path later would fail: its backup goes beside it, the new file replaces its real file."""
+    for folder in (os.path.dirname(os.path.abspath(path)), os.path.dirname(os.path.realpath(path))):
+        d = folder
+        while d and not os.path.exists(d):
+            d = os.path.dirname(d)
+        if not os.access(d or "/", os.W_OK):
+            fail(f"cannot change {path}: the folder {d} is read-only.")
+
+
+def cmd_check(path, md_path, line, hook_path, uninstall, skip_md):
+    """Find every problem that would stop the run halfway, before anything is changed."""
+    exists, data = load_settings(path)
+    if uninstall == "1":
+        changes = exists and bool(plan_uninstall(data))
+    else:
+        changes = plan_install(data, hook_command(hook_path), hook_path)[0] is not None
+    if changes:
+        need_writable(path)
+    if skip_md == "1":
+        return
+    text = read_md(md_path)
+    changed = md_removed(text, line)[0] if uninstall == "1" else md_added(text, line)
+    if changed is not None:
+        need_writable(md_path)
 
 
 def cmd_settings_install(path, hook_path, ts, dry):
+    settings_install(path, hook_path, ts, dry)
+    _, data = load_settings(path)
+    if data.get("disableAllHooks") is True:
+        print('settings.json: NOTE: "disableAllHooks" is true there, so Claude Code runs no hooks, this one '
+              "included, until you remove it")
+
+
+def settings_install(path, hook_path, ts, dry):
     exists, data = load_settings(path)
     command = hook_command(hook_path)
     what, added = plan_install(data, command, hook_path)
@@ -276,11 +307,8 @@ def cmd_settings_install(path, hook_path, ts, dry):
     print(f"settings.json: {said(what, dry)}{saved}")
 
 
-def cmd_settings_uninstall(path, ts, dry):
-    exists, data = load_settings(path)
-    if not exists:
-        print("settings.json: unchanged, no settings.json")
-        return
+def plan_uninstall(data):
+    """Remove every one of our hooks from data (any event, any matcher). Returns what was removed."""
     hooks = data.get("hooks")
     removed = []
     if isinstance(hooks, dict):
@@ -305,6 +333,15 @@ def cmd_settings_uninstall(path, ts, dry):
                 del hooks[event]
         if not hooks and removed:
             del data["hooks"]
+    return removed
+
+
+def cmd_settings_uninstall(path, ts, dry):
+    exists, data = load_settings(path)
+    if not exists:
+        print("settings.json: unchanged, no settings.json")
+        return
+    removed = plan_uninstall(data)
     if not removed:
         print("settings.json: unchanged, no context-discipline hook found")
         return
@@ -317,15 +354,40 @@ def cmd_settings_uninstall(path, ts, dry):
     print(f"settings.json: removed {len(removed)} hook entries ({what}); backup: {saved}")
 
 
-def read_text(path):
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+def read_md(path):
+    """CLAUDE.md as text with its line endings untouched ("" if missing). Stops the run if it is not UTF-8."""
+    if not os.path.exists(path):
+        return ""
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        fail(f"{path} is not UTF-8 text, so the installer will not edit it.\n"
+             "Convert it to UTF-8, or run with --skip-claude-md and add the line yourself.")
+    except OSError as e:
+        fail(f"cannot read {path}: {e}")
+
+
+def md_added(text, line):
+    """text with line appended in the file's own line endings, or None if a line already mentions the skill."""
+    if any("context-discipline" in l for l in text.splitlines()):
+        return None
+    nl = "\r\n" if "\r\n" in text else "\n"
+    return text + (nl if text and not text.endswith("\n") else "") + line + nl
+
+
+def md_removed(text, line):
+    """(text without the installer's line, or None if it is not there; other lines that mention the skill)."""
+    lines = text.splitlines(keepends=True)
+    keep = [l for l in lines if l.strip() != line.strip()]
+    others = [l.strip() for l in keep if "context-discipline" in l]
+    return ("".join(keep) if len(keep) != len(lines) else None), others
 
 
 def cmd_md_add(path, line, ts, dry):
     exists = os.path.exists(path)
-    text = read_text(path) if exists else ""
-    if any("context-discipline" in l for l in text.splitlines()):
+    new = md_added(read_md(path), line)
+    if new is None:
         print("CLAUDE.md:     unchanged, a line already mentions context-discipline")
         return
     if dry == "1":
@@ -333,7 +395,6 @@ def cmd_md_add(path, line, ts, dry):
         print(f"CLAUDE.md:     would append this line ({where}):")
         print(f"               {line}")
         return
-    new = text + ("\n" if text and not text.endswith("\n") else "") + line + "\n"
     saved = f"; backup: {backup(path, ts)}" if exists else "; created the file"
     write_atomic(path, new)
     print(f"CLAUDE.md:     appended the context-discipline line{saved}")
@@ -343,21 +404,19 @@ def cmd_md_remove(path, line, ts, dry):
     if not os.path.exists(path):
         print("CLAUDE.md:     unchanged, no CLAUDE.md")
         return
-    lines = read_text(path).splitlines(keepends=True)
-    keep = [l for l in lines if l.strip() != line.strip()]
-    others = [l.strip() for l in keep if "context-discipline" in l]
+    new, others = md_removed(read_md(path), line)
     warn = ""
     if others:
         warn = (f"\nCLAUDE.md:     NOTE: {len(others)} other line(s) mention context-discipline and were left alone; "
                 f"edit {path} if you want them gone")
-    if len(keep) == len(lines):
+    if new is None:
         print("CLAUDE.md:     unchanged, the installer's line is not there" + warn)
         return
     if dry == "1":
         print(f"CLAUDE.md:     would remove the context-discipline line; backup first to {path}.bak-{ts}" + warn)
         return
     saved = backup(path, ts)
-    write_atomic(path, "".join(keep))
+    write_atomic(path, new)
     print(f"CLAUDE.md:     removed the context-discipline line; backup: {saved}" + warn)
 
 
@@ -466,8 +525,8 @@ skill_uninstall() {
   fi
 }
 
-# Check settings.json before touching anything, so a broken file stops the run with no change at all.
-helper check "$SETTINGS" || exit 1
+# Check settings.json and CLAUDE.md before touching anything, so a problem stops the run with no change at all.
+helper check "$SETTINGS" "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$HOOK" "$UNINSTALL" "$SKIP_MD" || exit 1
 
 if [ "$DRY" = 1 ]; then
   echo "context-discipline installer: DRY RUN, nothing will be changed"
@@ -509,7 +568,8 @@ if [ "$DRY" = 1 ]; then
 elif [ "$UNINSTALL" = 1 ]; then
   cat <<EOF
 Next steps:
-  1. Restart Claude Code so the removed hook is no longer loaded (open /hooks to check).
+  1. Claude Code picks up the change within a few seconds: open /hooks to check the hook is gone, and
+     restart Claude Code only if it is still listed.
   2. Projects keep their .claude/brain pointer, STATUS.md and overview; delete .claude/brain in a
      project if you no longer want anything loaded there.
 To install again: ./install.sh
@@ -517,7 +577,8 @@ EOF
 else
   cat <<EOF
 Next steps:
-  1. Restart Claude Code. Hooks are read at startup; open /hooks to review them.
+  1. Claude Code picks up the new hook within a few seconds: open /hooks to check the SessionStart hook
+     is listed, and restart Claude Code only if it is not.
   2. In each project that will outlive one session, set up its brain:
        bash "$DEST/scripts/init-brain.sh" <project-root>
      then fill in STATUS.md and 00-Project-Overview.md and commit them with .claude/brain.

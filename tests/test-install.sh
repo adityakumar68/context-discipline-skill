@@ -36,7 +36,7 @@ A = sys.argv[3:]
 M = "context-discipline/scripts/brain-hook.sh"
 def ours():
     return [(ev, e.get("matcher"), h.get("command")) for ev, es in d.get("hooks", {}).items()
-            for e in es for h in e.get("hooks", []) if M in h.get("command", "")]
+            for e in es if isinstance(e, dict) for h in e.get("hooks", []) if M in h.get("command", "")]
 sys.exit(0 if eval(sys.argv[2]) else 1)
 PY
 }
@@ -82,8 +82,9 @@ check "fresh: settings.json has one SessionStart entry, with no matcher (every s
   jq_ "$C/settings.json" 'd == {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": A[0]}]}]}}' "$want"
 check "fresh: CLAUDE.md created with the line once" [ "$(md_lines "$C/CLAUDE.md")" = 1 ]
 check "fresh: no backups made (nothing existed)" eval '[ "$(count "$C/*.bak-*")" = 0 ] && [ ! -e "$C/skill-backups" ]'
-check "fresh: summary gives the next steps (restart, init-brain, pipe test)" \
-  eval 'printf "%s" "$out" | grep -q "Restart Claude Code" && printf "%s" "$out" | grep -q "init-brain.sh" && printf "%s" "$out" | grep -q "Project brain loaded from"'
+check "fresh: summary gives the next steps (/hooks check, init-brain, pipe test)" \
+  eval 'printf "%s" "$out" | grep -q "/hooks" && printf "%s" "$out" | grep -q "init-brain.sh" && printf "%s" "$out" | grep -q "Project brain loaded from"'
+check "fresh: summary does not claim hooks load only at startup" eval '! printf "%s" "$out" | grep -qi "read at startup"'
 
 # --- 2. Whole chain: installed init-brain.sh + the exact hook command from settings.json ---------------------
 P="$H/work/notes-app"; mkdir -p "$P/src/deep"
@@ -316,6 +317,46 @@ PY
 out=$(inst "$H18" --dry-run 2>&1)
 check "dry run before the skill is copied: the hook that will run it is not called stale" \
   eval 'printf "%s" "$out" | grep -q "settings.json: unchanged"'
+
+# --- 15. Problems found before anything is changed ---------------------------------------------------------------
+H19=$(new_home); C="$H19/.claude"; mkdir -p "$C"
+echo '{"hooks": {"SessionStart": ["echo legacy"]}}' > "$C/settings.json"
+out=$(inst "$H19" --dry-run 2>&1); rc1=$?
+out=$(inst "$H19" 2>&1); rc=$?
+check "SessionStart entry that is a plain string: dry run and install work, the entry is kept" \
+  eval '[ "$rc1" = 0 ] && [ "$rc" = 0 ] && jq_ "$C/settings.json" "d[\"hooks\"][\"SessionStart\"][0] == \"echo legacy\" and len(ours()) == 1"'
+
+H20=$(new_home); C="$H20/.claude"; mkdir -p "$C"
+echo '{"theme": "dark"}' > "$C/settings.json"; printf '# R\xe9gles\n' > "$C/CLAUDE.md"
+before=$(tree_sum "$H20"); out=$(inst "$H20" 2>&1); rc=$?
+check "CLAUDE.md that is not UTF-8: stops with a message naming it, nothing changed" \
+  eval '[ "$rc" != 0 ] && printf "%s" "$out" | grep -q "CLAUDE.md" && [ "$before" = "$(tree_sum "$H20")" ]'
+inst "$H20" --skip-claude-md >/dev/null 2>&1; rc=$?
+check "CLAUDE.md that is not UTF-8: --skip-claude-md still installs" eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(ours()) == 1"'
+
+H21=$(new_home); C="$H21/.claude"; mkdir -p "$C" "$H21/store"
+echo '{"theme": "dark"}' > "$H21/store/settings.json"; ln -s "$H21/store/settings.json" "$C/settings.json"; chmod 555 "$H21/store"
+before=$(tree_sum "$H21"); out=$(inst "$H21" 2>&1); rc=$?
+check "settings.json in a read-only folder: stops before any change, says why" \
+  eval '[ "$rc" != 0 ] && printf "%s" "$out" | grep -q "read-only" && [ "$before" = "$(tree_sum "$H21")" ]'
+chmod 755 "$H21/store"; inst "$H21" >/dev/null 2>&1; chmod 555 "$H21/store"
+out=$(inst "$H21" 2>&1); rc=$?
+check "settings.json in a read-only folder that already has the hook: install still runs" \
+  eval '[ "$rc" = 0 ] && printf "%s" "$out" | grep -q "settings.json: unchanged"'
+chmod 755 "$H21/store"
+
+# --- 16. CRLF CLAUDE.md keeps its line endings; disableAllHooks is pointed out -------------------------------------
+H22=$(new_home); C="$H22/.claude"; mkdir -p "$C"
+printf '# Rules\r\n- one\r\n' > "$C/CLAUDE.md"; cp "$C/CLAUDE.md" "$ROOT/crlf.md"
+inst "$H22" >/dev/null 2>&1
+check "CRLF CLAUDE.md: still CRLF throughout after install (3 lines, 3 CRs)" \
+  eval '[ "$(tr -cd "\r" < "$C/CLAUDE.md" | wc -c | tr -d " ")" = 3 ] && [ "$(wc -l < "$C/CLAUDE.md" | tr -d " ")" = 3 ]'
+inst "$H22" --uninstall >/dev/null 2>&1
+check "CRLF CLAUDE.md: uninstall gives back the original bytes" cmp -s "$C/CLAUDE.md" "$ROOT/crlf.md"
+
+H23=$(new_home); C="$H23/.claude"; mkdir -p "$C"; echo '{"disableAllHooks": true}' > "$C/settings.json"
+out=$(inst "$H23" 2>&1)
+check "disableAllHooks: the summary warns that no hook will run" eval 'printf "%s" "$out" | grep -q "disableAllHooks"'
 
 echo "== install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]
