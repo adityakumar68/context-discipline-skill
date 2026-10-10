@@ -12,19 +12,54 @@ set -u
 
 usage() { echo "usage: $(basename "$0") <project-root> [status-relpath (default STATUS.md)]" >&2; exit 2; }
 [ $# -ge 1 ] && [ $# -le 2 ] || usage
+refuse() { echo "init-brain: $*" >&2; exit 1; }
 
 root_in="$1"
 status_rel="${2:-STATUS.md}"
-[ -d "$root_in" ] || { echo "init-brain: not a directory: $root_in" >&2; exit 1; }
-root=$(cd "$root_in" && pwd -P) || exit 1
+[ -d "$root_in" ] || refuse "not a directory: $root_in"
+root=$(cd -P "$root_in" && pwd -P) || exit 1
 
 here=$(cd "$(dirname "$0")" && pwd -P)
 templates="$here/../references/brain-templates.md"
-[ -r "$templates" ] || { echo "init-brain: templates not found: $templates" >&2; exit 1; }
+[ -r "$templates" ] || refuse "templates not found: $templates"
 
+# The hook never loads a brain whose pointer sits in $HOME or /, so refuse those roots.
+home=$(cd -P "${HOME:-/}" 2>/dev/null && pwd -P) || home="${HOME%/}"
+[ "$root" = / ] && refuse "refusing to use / as a project root; pass the project's own folder."
+[ "$root" = "$home" ] && refuse "refusing to set up a brain in your home folder ($root): the hook stops before \$HOME, \
+so it would never load it, and $root/.claude is Claude Code's global config. Pass a project folder instead."
+
+# physical <path>: <path> with every symlink resolved, its last part included. Fails if a folder is missing.
+physical() {
+  local p="$1" d b t n=0
+  while :; do
+    d=$(dirname -- "$p") && b=$(basename -- "$p") || return 1
+    d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
+    if [ "$d" = / ]; then p="/$b"; else p="$d/$b"; fi
+    [ -L "$p" ] || break
+    n=$((n + 1)); [ "$n" -le 20 ] || return 1
+    t=$(readlink -- "$p") || return 1
+    case "$t" in /*) p="$t" ;; *) p="$d/$t" ;; esac
+  done
+  printf '%s\n' "$p"
+}
+
+# The hook only loads a STATUS file inside the project root, named by a relative path; check that here too.
 case "$status_rel" in
-  /*) status="$status_rel" ;;
-  *) status="$root/$status_rel" ;;
+  /*|'~'*) refuse "the STATUS path must be relative to the project root, because the hook only loads files inside it: $status_rel" ;;
+  */|.|*/.) refuse "the STATUS path names a folder, not a file: $status_rel" ;;
+esac
+case "/$status_rel/" in
+  */../*) refuse "the STATUS path must not contain '..': $status_rel" ;;
+esac
+status="$root/$status_rel"
+[ -d "$status" ] && refuse "the STATUS path names a folder, not a file: $status_rel"
+check="$status"   # the STATUS file, or the deepest folder on its way that already exists
+while [ ! -e "$check" ] && [ ! -L "$check" ] && [ ! -d "$(dirname "$check")" ]; do check=$(dirname "$check"); done
+real=$(physical "$check") || refuse "cannot resolve the STATUS path: $status_rel"
+case "$real" in
+  "$root"|"$root"/*) ;;
+  *) refuse "the STATUS path leads outside the project root through a symlink: $status_rel" ;;
 esac
 overview="$(dirname "$status")/00-Project-Overview.md"
 pointer="$root/.claude/brain"
@@ -33,12 +68,12 @@ today=$(date +%Y-%m-%d)
 
 # Print the fenced block that follows "<!-- template:NAME -->", with placeholders filled.
 template() {
-  awk -v name="$1" -v project="$project" -v today="$today" '
+  PROJECT="$project" TODAY="$today" awk -v name="$1" '
     function fill(s,   out, i) {
       out = ""
-      while ((i = index(s, "{{PROJECT}}")) > 0) { out = out substr(s, 1, i - 1) project; s = substr(s, i + 11) }
+      while ((i = index(s, "{{PROJECT}}")) > 0) { out = out substr(s, 1, i - 1) ENVIRON["PROJECT"]; s = substr(s, i + 11) }
       s = out s; out = ""
-      while ((i = index(s, "{{DATE}}")) > 0) { out = out substr(s, 1, i - 1) today; s = substr(s, i + 8) }
+      while ((i = index(s, "{{DATE}}")) > 0) { out = out substr(s, 1, i - 1) ENVIRON["TODAY"]; s = substr(s, i + 8) }
       return out s
     }
     $0 == "<!-- template:" name " -->" { found = 1; next }
@@ -81,4 +116,7 @@ echo "Project brain for $root:"
 echo "  STATUS:   $status ($status_state)"
 echo "  Overview: $overview ($overview_state)"
 echo "  Pointer:  $pointer ($pointer_state)"
+case "$status_state$overview_state$pointer_state" in
+  *"NOT created"*) echo "Some files were NOT created; fix the cause above and run again." >&2; exit 1 ;;
+esac
 echo "Next: fill in both files (keep STATUS under 9,000 characters: wc -m), then commit them and .claude/brain if this is a repo."
