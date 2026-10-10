@@ -9,8 +9,8 @@
 #   - it is accepted only if, with every symlink resolved, it is a regular text file inside <dir>.
 # Never writes files, never touches the network.
 
-CD_POINTER_READ=4096   # bytes of a pointer that are read
-CD_PATH_MAX=1024       # bytes in its path line (PATH_MAX on macOS)
+CD_POINTER_READ=4096   # bytes of a pointer that are read (the refusal reasons below say 4,096)
+CD_PATH_MAX=1024       # bytes in its path line, PATH_MAX on macOS (the refusal reasons say 1,024)
 
 # cd_json_get <json> <field>: print the top-level string <field> of <json> ("" if missing or not a string).
 # Fails if <json> is not a JSON object, or if neither jq nor python3 is installed.
@@ -94,7 +94,7 @@ cd_physical() {
 # Returns 1 with CD_REFUSED set to the reason (to follow "<pointer> ") if the pointer is refused,
 # 2 if the project folder cannot be read at all.
 cd_check_pointer() {
-  local line rel="" size text ended=0 more=""
+  local line="" rel="" size text ended=0 more=""
   LC_ALL=C; export LC_ALL
   CD_REL=""; CD_STATUS=""; CD_SIZE=""; CD_REFUSED=""
   # Only the first $CD_POINTER_READ bytes are read. The pointer is a regular file (cd_find_brain checks with -f),
@@ -114,10 +114,10 @@ cd_check_pointer() {
   done < <(head -c "$CD_POINTER_READ" -- "$CD_POINTER" 2>/dev/null)
   size=$(wc -c < "$CD_POINTER" 2>/dev/null | tr -d '[:space:]')
   case "$size" in ''|*[!0-9]*) size=0 ;; esac
-  [ "$size" -gt "$CD_POINTER_READ" ] && more=" in its first $CD_POINTER_READ bytes"
+  [ "$size" -gt "$CD_POINTER_READ" ] && more=" in its first 4,096 bytes"
   # A line without a newline is whole only if the file ends there; one cut by the read is never used.
   if [ -n "$rel" ] && { [ "${#rel}" -gt "$CD_PATH_MAX" ] || { [ "$ended" = 0 ] && [ -n "$more" ]; }; }; then
-    CD_REFUSED="names no file$more (its path line must be at most $CD_PATH_MAX bytes)"; return 1
+    CD_REFUSED="names no file: its path line must be at most 1,024 bytes and end within its first 4,096"; return 1
   fi
   [ -n "$rel" ] || { CD_REFUSED="names no file$more"; return 1; }
   case "$rel" in

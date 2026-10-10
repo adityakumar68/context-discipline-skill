@@ -7,8 +7,9 @@
 #   - <project-root>/.claude/brain, the pointer the SessionStart hook (brain-hook.sh) follows
 #   - the line .claude/compactions/ in <project-root>/.gitignore (created if missing), so the compaction
 #     summaries the PostCompact hook (compact-log.sh) saves are never committed
-# Templates come from ../references/brain-templates.md. Existing files are never
-# overwritten; the summary says which ones already existed.
+# Templates come from ../references/brain-templates.md. Existing files are never overwritten, and a
+# symlink is never written through; the summary says which ones already existed. An existing pointer is read
+# only as the hooks read it (brain-lib.sh: a regular file, its first 4,096 bytes).
 
 set -u
 
@@ -24,6 +25,8 @@ root=$(cd -P "$root_in" && pwd -P) || exit 1
 here=$(cd "$(dirname "$0")" && pwd -P)
 templates="$here/../references/brain-templates.md"
 [ -r "$templates" ] || refuse "templates not found: $templates"
+# The hooks' own rules for reading a pointer (cd_check_pointer), so an existing one is judged as they judge it.
+. "$here/brain-lib.sh" 2>/dev/null || refuse "brain-lib.sh not found next to $(basename "$0")"
 
 # The hook never loads a brain whose pointer sits in $HOME or /, so refuse those roots.
 home=$(cd -P "${HOME:-/}" 2>/dev/null && pwd -P) || home="${HOME%/}"
@@ -85,10 +88,11 @@ template() {
   ' "$templates"
 }
 
-# create FILE TEMPLATE-NAME -> echoes "created" or "exists, left untouched"
+# create FILE TEMPLATE-NAME -> echoes "created" or "exists, left untouched" (a symlink, even a dangling one,
+# counts as existing: a cloned repo's planted link is never written through)
 create() {
   local file="$1" name="$2" body
-  if [ -e "$file" ]; then
+  if [ -e "$file" ] || [ -L "$file" ]; then
     echo "exists, left untouched"
     return
   fi
@@ -103,9 +107,21 @@ create() {
 status_state=$(create "$status" status)
 overview_state=$(create "$overview" overview)
 
-if [ -e "$pointer" ]; then
-  current=$(grep -v '^[[:space:]]*#' "$pointer" 2>/dev/null | grep -v '^[[:space:]]*$' | head -n 1)
-  pointer_state="exists, left untouched; points to ${current:-nothing}"
+# An existing pointer (perhaps from a cloned repo) is untrusted: it is read only if it is a regular file, and then
+# only as the hooks read it (the first 4,096 bytes). Its text is shown only if the hook would accept it.
+if [ -L "$pointer" ] && [ ! -e "$pointer" ]; then
+  pointer_state="exists, left untouched; a symlink to a missing file, so the hook ignores it"
+elif [ -e "$pointer" ] && [ ! -f "$pointer" ]; then
+  pointer_state="exists, left untouched; not a regular file, so the hook ignores it"
+elif [ -e "$pointer" ]; then
+  CD_POINTER="$pointer"; CD_ROOT="$root"
+  if cd_check_pointer; then
+    pointer_state="exists, left untouched; points to ${CD_REL//[[:cntrl:]]/?}"
+  else
+    pointer_state="exists, left untouched; the hook refuses it because it ${CD_REFUSED:-cannot be checked}"
+  fi
+elif [ -L "$root/.claude" ] || { [ -e "$root/.claude" ] && [ ! -d "$root/.claude" ]; }; then
+  pointer_state="NOT created: $root/.claude is a symlink or not a folder; create the pointer yourself"
 else
   mkdir -p "$root/.claude" && {
     echo "# Project brain pointer (context-discipline skill). The SessionStart hook prints the file named on"
@@ -119,6 +135,8 @@ ignore_line='.claude/compactions/'
 gitignore="$root/.gitignore"
 if [ -L "$gitignore" ] || { [ -e "$gitignore" ] && [ ! -f "$gitignore" ]; }; then
   ignore_state="NOT changed: not a regular file; add the line $ignore_line to it yourself"
+elif [ -f "$gitignore" ] && [ "$(wc -c < "$gitignore" 2>/dev/null | tr -d '[:space:]')" -gt 1048576 ] 2>/dev/null; then
+  ignore_state="NOT changed: over 1 MB, so not read; add the line $ignore_line to it yourself"
 elif [ -f "$gitignore" ] && tr -d '\r' < "$gitignore" | grep -Eqx '[[:space:]]*/?\.claude/compactions/?[[:space:]]*'; then
   ignore_state="exists, already ignores $ignore_line"
 elif [ -f "$gitignore" ]; then

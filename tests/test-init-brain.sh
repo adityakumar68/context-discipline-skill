@@ -59,6 +59,41 @@ fi
 P3="$HM/proj\tname"; mkdir -p "$P3"; init "$P3" >/dev/null
 check "backslashes in the folder name are kept in the STATUS heading" grep -qF 'proj\tname — STATUS' "$P3/STATUS.md"
 
+# --- files a cloned repo already has are untrusted: never hang, never read much, never write through a symlink -----
+# init_t: init with a 10-second alarm (rc 142 if it hangs).
+init_t() { env HOME="$HM" perl -e 'alarm shift; exec @ARGV' 10 bash "$I" "$@" 2>&1; }
+# unblock <fifo>: release anything still blocked opening <fifo> (a hung run killed by the alarm leaves it waiting).
+unblock() { perl -MFcntl -e 'sysopen(my $f, $ARGV[0], O_WRONLY | O_NONBLOCK) and close($f)' "$1" 2>/dev/null; }
+# Output goes to a file, not $(...): a reader left blocked on the FIFO would keep a $(...) pipe open forever.
+mkdir -p "$HM/f1/.claude"; mkfifo "$HM/f1/.claude/brain"
+init_t "$HM/f1" > "$T/f1.out"; rc=$?; unblock "$HM/f1/.claude/brain"; out=$(cat "$T/f1.out")
+check "existing pointer that is a FIFO: not read, no hang, left untouched, exit 0" \
+  eval '[ $rc = 0 ] && has "$out" "not a regular file" && [ -p "$HM/f1/.claude/brain" ]'
+mkdir -p "$HM/f2/.claude"; python3 -I -c 'import sys; open(sys.argv[1], "w").write("a" * 2000000)' "$HM/f2/.claude/brain"
+out=$(init_t "$HM/f2"); rc=$?
+check "existing 2 MB one-line pointer: only its start is read, short summary, exit 0" \
+  eval '[ $rc = 0 ] && has "$out" "exists, left untouched" && [ "${#out}" -lt 4000 ]'
+mkdir -p "$HM/f3/.claude"; echo docs/STATUS.md > "$HM/f3/.claude/brain"
+out=$(init_t "$HM/f3"); rc=$?
+check "existing pointer the hook would refuse: the summary says so and why" \
+  eval '[ $rc = 0 ] && has "$out" "exists, left untouched" && has "$out" "names a missing file"'
+mkdir -p "$HM/f4/.claude"; ln -s "$HM/outside/planted-brain" "$HM/f4/.claude/brain"
+out=$(init_t "$HM/f4"); rc=$?
+check "pointer that is a symlink to a missing file outside: not written through" \
+  eval '[ ! -e "$HM/outside/planted-brain" ] && has "$out" "left untouched"'
+mkdir -p "$HM/f5"; ln -s "$HM/outside/planted-overview" "$HM/f5/00-Project-Overview.md"
+out=$(init_t "$HM/f5"); rc=$?
+check "overview that is a symlink to a missing file outside: not written through" \
+  eval '[ ! -e "$HM/outside/planted-overview" ] && has "$out" "left untouched"'
+mkdir -p "$HM/f6" "$HM/outside/dot-claude"; ln -s "$HM/outside/dot-claude" "$HM/f6/.claude"
+out=$(init_t "$HM/f6"); rc=$?
+check ".claude that is a symlink out of the project: no pointer written there, NOT created, exit 1" \
+  eval '[ $rc = 1 ] && [ ! -e "$HM/outside/dot-claude/brain" ] && has "$out" "NOT created"'
+mkdir -p "$HM/f7"; python3 -I -c 'import sys; open(sys.argv[1], "w").write("x" * 2000000)' "$HM/f7/.gitignore"
+cp "$HM/f7/.gitignore" "$T/f7-orig"; out=$(init_t "$HM/f7"); rc=$?
+check ".gitignore over 1 MB: not read or changed, summary says to add the line by hand, exit 0" \
+  eval '[ $rc = 0 ] && cmp -s "$HM/f7/.gitignore" "$T/f7-orig" && has "$out" "NOT changed"'
+
 # --- whatever init-brain sets up, the hook loads ------------------------------------------------------------------
 mkdir -p "$HM/p4/sub"
 init "$HM/p4" docs/brain/STATUS.md >/dev/null

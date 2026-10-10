@@ -19,9 +19,9 @@ three exit 0 on every path and never use the network.
 
 - Runs on every source: `startup`, `resume`, `clear`, `compact` and `fork`. The installer adds one entry with no
   matcher, so sources Claude Code adds later are covered too.
-- The pointer's first non-empty line not starting with `#` is the STATUS path, relative to `<dir>`. Absolute paths,
-  `~/...`, `..` escapes and symlinks that leave `<dir>` are refused, and so are folders, missing files and binary
-  files. A refused pointer prints one line, `(Project brain not loaded: <pointer> <reason>.)`, and no file content.
+- The pointer's first non-empty line not starting with `#` is the STATUS path, relative to `<dir>`. Only the
+  pointer's first 4,096 bytes are read, and the path line may be at most 1,024 bytes. Absolute paths, `~/...`, `..`
+  escapes and symlinks that leave `<dir>` are refused, and so are folders, missing files and binary files. A refused pointer prints one line, `(Project brain not loaded: <pointer> <reason>.)`, and no file content.
 - An accepted file is printed as plain stdout, which Claude Code adds to context for `SessionStart`, followed by
   `(Project brain loaded from <path>. Working rules: context-discipline skill.)`.
 - **Size limit: 9,000 characters**, counted as Claude Code counts them (an emoji counts 2; check with `wc -m`). A
@@ -97,6 +97,8 @@ Preferred: `./install.sh` from the repo (`--dry-run` shows every change). By han
 
 Then, per project: `bash "${CLAUDE_SKILL_DIR}/scripts/init-brain.sh" <project-root> [status-relpath]`. It refuses
 `$HOME` and `/` as the root, refuses STATUS paths the hook would refuse, and exits 1 if anything was not created.
+It never overwrites a file or writes through a symlink, and it reads an existing pointer only as the hooks do, so a
+cloned repo's planted files cannot hang it or send its writes outside the project.
 
 If a project already has its own SessionStart hook that prints its STATUS (for example `cat STATUS.md` in its
 `.claude/settings.json`), remove it, or the file is injected twice. Claude Code picks up settings edits within a few

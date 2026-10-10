@@ -7,7 +7,8 @@
 # compact, fork).
 #
 # Pointer format: the first non-empty line not starting with "#" is the STATUS
-# path, relative to <dir>. The hook prints it only if, with every symlink
+# path, relative to <dir> (only the first 4,096 bytes are read; the line may be
+# at most 1,024 bytes). The hook prints it only if, with every symlink
 # resolved, it is a regular text file inside <dir>: absolute paths, "~/...", ".."
 # escapes and symlinks that leave <dir> are refused, because the hook runs in
 # every session and a downloaded repo could otherwise point it at any file.
