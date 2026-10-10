@@ -4,7 +4,7 @@
 
 here=$(cd "$(dirname "$0")" && pwd -P)
 status=0
-for t in test-scripts.sh test-install.sh; do
+for t in test-scripts.sh test-install.sh test-ctx-audit.sh; do
   echo "### $t"
   bash "$here/$t" || status=1
   echo
