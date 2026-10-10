@@ -14,7 +14,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd -P)
 A="$here/../context-discipline/scripts/ctx-audit.py"
 F="$here/fixtures/ctx-audit"
-T=$(mktemp -d) && [ -d "$T" ] || { echo "mktemp failed" >&2; exit 1; }
+T=$(mktemp -d "${TMPDIR:-/tmp}/cd-tests.XXXXXX") && [ -d "$T" ] || { echo "mktemp failed" >&2; exit 1; }
 trap 'rm -rf "$T"' EXIT
 
 pass=0; fail=0
