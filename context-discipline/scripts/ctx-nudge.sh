@@ -309,7 +309,8 @@ def main():
         now = int((pct - FIRST) // STEP) if pct >= FIRST else -1
         if now > step:
             step = now
-            rel = re.sub(r"[\x00-\x1f\x7f]", "?", os.environ.get("CD_REL") or "STATUS.md")[:200]
+            # the full path: the session's cwd may be a subfolder of the project
+            rel = re.sub(r"[\x00-\x1f\x7f]", "?", os.environ.get("CD_STATUS") or "STATUS.md")[:2100]
             note = (
                 f"Context check (context-discipline): this session's context is at {int(pct)}% of its "
                 f"{window:,}-token window ({ctx:,} tokens).\n"
@@ -337,4 +338,4 @@ PY
 
 # exec, so a hook timeout (or any kill) reaches python itself instead of leaving it orphaned. The script ends in
 # try/except, so it always exits 0.
-CD_REL="$CD_REL" exec python3 -I -c "$measure" 2>/dev/null <<<"$input"
+CD_STATUS="$CD_STATUS" exec python3 -I -c "$measure" 2>/dev/null <<<"$input"

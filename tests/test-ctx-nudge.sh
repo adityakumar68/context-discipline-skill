@@ -117,7 +117,8 @@ run "$P/src" "$TR/t40" "$S1"
 check "40% of a 200K window: one note, valid UserPromptSubmit JSON" nudged "40%"
 n=$(note)
 check "note gives the tokens and the window" eval 'has "$n" "80,000" && has "$n" "200,000"'
-check "note names the STATUS file from the pointer (docs/STATUS.md)" has "$n" "docs/STATUS.md"
+check "note names the STATUS file by its full path (the session's cwd may be a subfolder)" \
+  has "$n" "update $P/docs/STATUS.md,"
 check "note asks for STATUS update, handoff note, then /clear or /compact <focus>, not mid-task" \
   eval 'has "$n" "handoff" && has "$n" "/clear" && has "$n" "/compact <focus>" && has "$n" "mid-task"'
 check "note is 2 to 4 lines" eval 'l=$(printf "%s\n" "$n" | grep -c ""); [ "$l" -ge 2 ] && [ "$l" -le 4 ]'

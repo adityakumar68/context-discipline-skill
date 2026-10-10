@@ -63,11 +63,12 @@ instructions can trigger its prompt-injection defenses.
   compaction. To see a compaction, the hook searches everything written to the transcript since the previous prompt
   (up to the last 16 MB) for its boundary record, so one early in a long turn is not missed; if more than 16 MB was
   written, a context lower than at the previous prompt counts as a compaction. The note is
-  `hookSpecificOutput.additionalContext`, three lines:
+  `hookSpecificOutput.additionalContext`, three lines, with the STATUS file's full path (the session's cwd may be a
+  subfolder):
   ```text
   Context check (context-discipline): this session's context is at 45% of its 200,000-token window (90,000 tokens).
-  Do not stop mid-task. At the next natural break, update STATUS.md, and write a handoff note if a new sub-task is about to start.
-  Then suggest to the user /clear (a fresh session that starts from STATUS.md and the handoff) or /compact <focus>.
+  Do not stop mid-task. At the next natural break, update /path/to/project/STATUS.md, and write a handoff note if a new sub-task is about to start.
+  Then suggest to the user /clear (a fresh session that starts from /path/to/project/STATUS.md and the handoff) or /compact <focus>.
   ```
 - Window, first that applies: `CD_CTX_WINDOW` (tokens); `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; `autoCompactWindow` from
   settings (managed, project `.claude/settings.local.json`, `.claude/settings.json`, then user settings;
