@@ -334,6 +334,7 @@ check "CLAUDE.md that is not UTF-8: stops with a message naming it, nothing chan
 inst "$H20" --skip-claude-md >/dev/null 2>&1; rc=$?
 check "CLAUDE.md that is not UTF-8: --skip-claude-md still installs" eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(ours()) == 1"'
 
+if [ "$(id -u)" != 0 ]; then   # root can write to a read-only folder, so these cases mean nothing there
 H21=$(new_home); C="$H21/.claude"; mkdir -p "$C" "$H21/store"
 echo '{"theme": "dark"}' > "$H21/store/settings.json"; ln -s "$H21/store/settings.json" "$C/settings.json"; chmod 555 "$H21/store"
 before=$(tree_sum "$H21"); out=$(inst "$H21" 2>&1); rc=$?
@@ -344,6 +345,7 @@ out=$(inst "$H21" 2>&1); rc=$?
 check "settings.json in a read-only folder that already has the hook: install still runs" \
   eval '[ "$rc" = 0 ] && printf "%s" "$out" | grep -q "settings.json: unchanged"'
 chmod 755 "$H21/store"
+fi
 
 # --- 16. CRLF CLAUDE.md keeps its line endings; disableAllHooks is pointed out -------------------------------------
 H22=$(new_home); C="$H22/.claude"; mkdir -p "$C"

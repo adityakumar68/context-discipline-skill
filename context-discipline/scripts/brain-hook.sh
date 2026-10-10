@@ -3,7 +3,8 @@
 #
 # Reads the hook's JSON from stdin, takes its "cwd", walks up from there looking
 # for a "<dir>/.claude/brain" pointer file, and prints the STATUS file it names so
-# Claude Code adds it to context on startup, resume, clear and compact.
+# Claude Code adds it to context at every session start (startup, resume, clear,
+# compact, fork).
 #
 # Pointer format: the first non-empty line not starting with "#" is the STATUS
 # path, relative to <dir>. The hook prints it only if, with every symlink
@@ -11,7 +12,8 @@
 # escapes and symlinks that leave <dir> are refused, because the hook runs in
 # every session and a downloaded repo could otherwise point it at any file.
 #
-# Contract: prints nothing and exits 0 when no pointer is found. When a pointer
+# Contract: prints nothing and exits 0 when no pointer is found or the input is
+# not a JSON object. When a pointer
 # is found but refused, prints one warning line naming it (no file content) and
 # exits 0. Never writes files, never touches the network.
 # Stops before $HOME and "/" so ~/.claude (global config) is never read as a brain.

@@ -48,10 +48,12 @@ check "STATUS path through a symlinked folder that leaves the project: refused" 
   eval '[ $rc = 1 ] && [ ! -e "$HM/outside/STATUS.md" ] && nothing_in "$HM/p2"'
 
 # --- failures show in the exit code -------------------------------------------------------------------------------
-mkdir -p "$HM/ro"; chmod 555 "$HM/ro"
-out=$(init "$HM/ro"); rc=$?
-chmod 755 "$HM/ro"
-check "read-only root: reports NOT created and exits non-zero" eval '[ $rc != 0 ] && has "$out" "NOT created"'
+if [ "$(id -u)" != 0 ]; then   # root can write to a read-only folder, so this case means nothing there
+  mkdir -p "$HM/ro"; chmod 555 "$HM/ro"
+  out=$(init "$HM/ro"); rc=$?
+  chmod 755 "$HM/ro"
+  check "read-only root: reports NOT created and exits non-zero" eval '[ $rc != 0 ] && has "$out" "NOT created"'
+fi
 
 # --- the project name goes into the templates as typed ------------------------------------------------------------
 P3="$HM/proj\tname"; mkdir -p "$P3"; init "$P3" >/dev/null
