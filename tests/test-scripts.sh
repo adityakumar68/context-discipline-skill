@@ -6,7 +6,7 @@
 set -u
 S=$(cd "$(dirname "$0")/../context-discipline/scripts" && pwd -P)
 H="$S/brain-hook.sh"; I="$S/init-brain.sh"; A="$S/ctx-audit.py"
-T=$(mktemp -d) && [ -d "$T" ] || { echo "mktemp failed" >&2; exit 1; }
+T=$(mktemp -d "${TMPDIR:-/tmp}/cd-tests.XXXXXX") && [ -d "$T" ] || { echo "mktemp failed" >&2; exit 1; }
 T=$(cd "$T" && pwd -P) || exit 1    # resolve symlinks (macOS /var -> /private/var) so paths compare equal
 trap 'rm -rf "$T"' EXIT
 

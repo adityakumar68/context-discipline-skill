@@ -8,7 +8,7 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 INSTALL="$REPO/install.sh"
-ROOT=$(mktemp -d) && [ -d "$ROOT" ] || { echo "mktemp failed" >&2; exit 1; }
+ROOT=$(mktemp -d "${TMPDIR:-/tmp}/cd-tests.XXXXXX") && [ -d "$ROOT" ] || { echo "mktemp failed" >&2; exit 1; }
 ROOT=$(cd "$ROOT" && pwd -P) || exit 1    # resolve symlinks (macOS /var -> /private/var) so paths compare equal
 trap 'rm -rf "$ROOT"' EXIT
 

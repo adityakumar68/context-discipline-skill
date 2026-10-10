@@ -6,7 +6,7 @@
 
 set -u
 H=$(cd "$(dirname "$0")/../context-discipline/scripts" && pwd -P)/brain-hook.sh
-T=$(mktemp -d) && [ -d "$T" ] || { echo "mktemp failed" >&2; exit 1; }
+T=$(mktemp -d "${TMPDIR:-/tmp}/cd-tests.XXXXXX") && [ -d "$T" ] || { echo "mktemp failed" >&2; exit 1; }
 T=$(cd "$T" && pwd -P) || exit 1    # resolve symlinks (macOS /var -> /private/var) so paths compare equal
 trap 'rm -rf "$T"' EXIT
 
@@ -122,7 +122,9 @@ make_status "$HM/mixed" '"a" + "\u20ac" * 9500'
 out=$(run_hook "$HM/mixed")
 check "odd byte offset (a + euro signs): the cut never splits a character" eval '[ "$(printf "%s" "$out" | units)" -le 10000 ]'
 
-long="$HM"; for i in 1 2 3 4 5 6 7 8 9; do long="$long/$(printf 'd%.0s' $(seq 1 100))"; done
+long="$HM"   # a 960-char project path (paths stay under 1,024, the macOS limit)
+while [ $((${#long} + 101)) -le 960 ]; do long="$long/$(printf 'd%.0s' $(seq 1 100))"; done
+pad=$((960 - ${#long} - 1)); [ "$pad" -gt 0 ] && long="$long/$(printf 'e%.0s' $(seq 1 "$pad"))"
 make_status "$long" '"y" * 8999 + "\n"'
 out=$(run_hook "$long")
 check "very long project path (${#long} chars): STATUS line + notice still fit under 10,000" \
