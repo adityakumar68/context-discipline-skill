@@ -1,0 +1,23 @@
+{
+  "skill_name": "context-discipline",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I'm starting a ~6 week side project: a Rust CLI that syncs my Obsidian vault to a static website. The repo is at PROJECT_DIR (empty git repo, just `git init`ed). We'll work on it over many sessions and I really don't want to lose the big picture every time the context compacts or I come back after a few days. Set the project up so that doesn't happen.",
+      "expected_output": "A project brain: STATUS.md (filled with real content, under 10k chars) + overview with a decision log + a .claude/brain pointer so the session-start hook injects it; a note on what goes in memory vs CLAUDE.md; no secrets.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Can you survey what's been published since 2024 on LLM-driven 3D indoor scene generation that also checks physical validity (collisions, stability, navigability)? I want to know which papers are closest to our project and what metrics they report.",
+      "expected_output": "The main agent delegates the survey to a subagent that can write files, with sources and citations saved to a file and a short (<= ~15 line) hand-back; it does not run the searches itself in the main context; the brief forbids sending private user data to external services.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Ok, we've settled all the design decisions for the auth refactor — they're in DECISIONS_FILE. Please write the spec now so I can review it.",
+      "expected_output": "A subagent drafts the spec from the decisions file (+ context brief) into a spec file; the main agent checks it via a short summary and grep spot-checks instead of reading or writing the whole spec itself; the user is asked to review the file.",
+      "files": ["evals/files/decisions.md"]
+    }
+  ]
+}
