@@ -130,5 +130,35 @@ out=$(run_hook "$long")
 check "very long project path (${#long} chars): STATUS line + notice still fit under 10,000" \
   eval '[ "$(printf "%s" "$out" | units)" -le 10000 ] && has "$out" "loaded from"'
 
+# --- finding the pointer ------------------------------------------------------------------------------------------
+point STATUS.md
+out=$(cd "$P/src" && echo '{bad json' | env -u CLAUDE_PROJECT_DIR HOME="$HM" bash "$H"); rc=$?
+check "malformed JSON: prints nothing (no fallback to \$PWD), exit 0" eval '[ $rc = 0 ] && [ -z "$out" ]'
+out=$(echo '{bad json' | env CLAUDE_PROJECT_DIR="$P" HOME="$HM" bash "$H")
+check "malformed JSON: no fallback to \$CLAUDE_PROJECT_DIR either" [ -z "$out" ]
+out=$(echo '{"source": "startup"}' | env CLAUDE_PROJECT_DIR="$P/src" HOME="$HM" bash "$H")
+check "valid JSON without cwd: falls back to \$CLAUDE_PROJECT_DIR" has "$out" project-p-status
+
+# Without jq the hook parses its input with python3; same results.
+NOJQ="$T/bin-without-jq"; mkdir -p "$NOJQ"
+for c in bash cat dirname basename readlink tr wc head tail od awk python3; do ln -s "$(command -v "$c")" "$NOJQ/$c"; done
+out=$(printf '{"cwd": "%s"}' "$P/src" | env -u CLAUDE_PROJECT_DIR PATH="$NOJQ" HOME="$HM" "$NOJQ/bash" "$H")
+check "no jq on PATH: python3 reads the cwd, STATUS printed" has "$out" project-p-status
+out=$(cd "$P/src" && echo '[1, 2]' | env -u CLAUDE_PROJECT_DIR PATH="$NOJQ" HOME="$HM" "$NOJQ/bash" "$H")
+check "no jq on PATH: input that is not a JSON object prints nothing" [ -z "$out" ]
+
+printf '\357\273\277STATUS.md\r\n' > "$PTR"; out=$(run_hook "$P")
+check "pointer with a UTF-8 BOM and CRLF: still read" has "$out" project-p-status
+point STATUS.md
+
+# The walk stops before $HOME even when HOME is a symlink or the cwd contains "..", so a pointer in the
+# home folder itself (where ~/.claude, the global config, lives) is never used.
+mkdir -p "$T/realhome/.claude" "$T/realhome/proj/x"; ln -s "$T/realhome" "$T/homelink"
+echo STATUS.md > "$T/realhome/.claude/brain"; echo HOME-STATUS > "$T/realhome/STATUS.md"
+out=$(printf '{"cwd": "%s"}' "$T/realhome/proj/x" | env -u CLAUDE_PROJECT_DIR HOME="$T/homelink" bash "$H")
+check "HOME is a symlink, cwd is the physical path: the home pointer is not used" [ -z "$out" ]
+out=$(printf '{"cwd": "%s"}' "$T/realhome/proj/.." | env -u CLAUDE_PROJECT_DIR HOME="$T/realhome" bash "$H")
+check "cwd with '..' that lands on \$HOME: the home pointer is not used" [ -z "$out" ]
+
 echo "== hook tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

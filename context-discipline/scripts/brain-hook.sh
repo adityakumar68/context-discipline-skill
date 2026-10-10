@@ -25,17 +25,16 @@ if [ ! -t 0 ]; then
   input=$(cat 2>/dev/null)
 fi
 
+# Input that is not a JSON object stops the hook (Claude Code always sends one). Valid JSON without "cwd",
+# or no JSON parser at all, falls back to $CLAUDE_PROJECT_DIR, then $PWD.
 cwd=""
 if [ -n "$input" ]; then
   if command -v jq >/dev/null 2>&1; then
-    cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
+    cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null) || exit 0
   elif command -v python3 >/dev/null 2>&1; then
     cwd=$(printf '%s' "$input" | python3 -I -c 'import json,sys
-try:
-    v = json.load(sys.stdin).get("cwd") or ""
-    print(v if isinstance(v, str) else "")
-except Exception:
-    pass' 2>/dev/null)
+v = json.load(sys.stdin).get("cwd") or ""
+print(v if isinstance(v, str) else "")' 2>/dev/null) || exit 0
   fi
 fi
 [ -z "$cwd" ] && cwd="${CLAUDE_PROJECT_DIR:-}"
@@ -46,8 +45,10 @@ case "$cwd" in
   *) exit 0 ;;
 esac
 
-# 2. Walk up to the nearest <dir>/.claude/brain, stopping before $HOME and "/".
-home="${HOME%/}"
+# 2. Walk up to the nearest <dir>/.claude/brain, stopping before $HOME and "/". Both the cwd and $HOME are
+#    compared with every symlink and ".." resolved, so neither a symlinked HOME nor "x/.." reaches ~/.claude.
+cwd=$(cd -P -- "$cwd" 2>/dev/null && pwd -P) || exit 0
+home=$(cd -P -- "${HOME:-/}" 2>/dev/null && pwd -P) || home="${HOME%/}"
 dir="${cwd%/}"
 pointer=""
 while [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "$home" ]; do
@@ -89,6 +90,7 @@ physical() {
 rel=""
 while IFS= read -r line || [ -n "$line" ]; do
   line="${line%$'\r'}"
+  line="${line#$'\357\273\277'}"            # drop a UTF-8 byte-order mark
   line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
   line="${line%"${line##*[![:space:]]}"}"   # trim trailing whitespace
   case "$line" in

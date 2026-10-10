@@ -13,7 +13,7 @@ trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
 ok() { echo "PASS $1"; pass=$((pass + 1)); }
 no() { echo "FAIL $1"; fail=$((fail + 1)); }
-hook() { HOME="$T" bash "$H"; }               # the walk-up stops at $HOME, so it never leaves $T
+hook() { env -u CLAUDE_PROJECT_DIR HOME="$T" bash "$H"; }   # the walk-up stops at $HOME, so it never leaves $T
 sum() { cat "$@" | cksum; }
 
 mkdir -p "$T/proj/.claude" "$T/proj/docs" "$T/proj/sub/dir" "$T/none/a" "$T/big/.claude"
