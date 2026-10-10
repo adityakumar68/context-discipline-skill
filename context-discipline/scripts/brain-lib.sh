@@ -3,9 +3,14 @@
 # folders are brain projects:
 #   - walk up from the session's cwd to the nearest "<dir>/.claude/brain" pointer, stopping before $HOME
 #     and "/" (so ~/.claude, the global config, is never read as a brain);
-#   - the pointer's first non-empty line not starting with "#" names the STATUS file, relative to <dir>;
+#   - the pointer's first non-empty line not starting with "#" names the STATUS file, relative to <dir>; only
+#     the pointer's first 4,096 bytes are read, and that line may be at most 1,024 bytes (a cloned repo's pointer
+#     is untrusted: a huge line would otherwise stall every hook);
 #   - it is accepted only if, with every symlink resolved, it is a regular text file inside <dir>.
 # Never writes files, never touches the network.
+
+CD_POINTER_READ=4096   # bytes of a pointer that are read
+CD_PATH_MAX=1024       # bytes in its path line (PATH_MAX on macOS)
 
 # cd_json_get <json> <field>: print the top-level string <field> of <json> ("" if missing or not a string).
 # Fails if <json> is not a JSON object, or if neither jq nor python3 is installed.
@@ -70,7 +75,7 @@ cd_find_brain() {
 cd_physical() {
   local p="$1" d b t n=0
   while :; do
-    d=$(dirname -- "$p") && b=$(basename -- "$p") || return 1
+    d=$(dirname -- "$p" 2>/dev/null) && b=$(basename -- "$p" 2>/dev/null) || return 1
     d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
     case "$b" in .|..) return 1 ;; esac
     if [ "$d" = / ]; then p="/$b"; else p="$d/$b"; fi
@@ -89,10 +94,14 @@ cd_physical() {
 # Returns 1 with CD_REFUSED set to the reason (to follow "<pointer> ") if the pointer is refused,
 # 2 if the project folder cannot be read at all.
 cd_check_pointer() {
-  local line rel="" size text
+  local line rel="" size text ended=0 more=""
   LC_ALL=C; export LC_ALL
   CD_REL=""; CD_STATUS=""; CD_SIZE=""; CD_REFUSED=""
-  while IFS= read -r line || [ -n "$line" ]; do
+  # Only the first $CD_POINTER_READ bytes are read. The pointer is a regular file (cd_find_brain checks with -f),
+  # so opening it cannot block; the cap keeps a huge pointer from costing memory or (bash 3.2 trims strings in
+  # quadratic time) seconds of CPU.
+  while :; do
+    if IFS= read -r line; then ended=1; elif [ -n "$line" ]; then ended=0; else break; fi
     line="${line%$'\r'}"
     line="${line#$'\357\273\277'}"            # drop a UTF-8 byte-order mark
     line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
@@ -102,8 +111,15 @@ cd_check_pointer() {
     esac
     rel="$line"
     break
-  done < "$CD_POINTER" 2>/dev/null
-  [ -n "$rel" ] || { CD_REFUSED="names no file"; return 1; }
+  done < <(head -c "$CD_POINTER_READ" -- "$CD_POINTER" 2>/dev/null)
+  size=$(wc -c < "$CD_POINTER" 2>/dev/null | tr -d '[:space:]')
+  case "$size" in ''|*[!0-9]*) size=0 ;; esac
+  [ "$size" -gt "$CD_POINTER_READ" ] && more=" in its first $CD_POINTER_READ bytes"
+  # A line without a newline is whole only if the file ends there; one cut by the read is never used.
+  if [ -n "$rel" ] && { [ "${#rel}" -gt "$CD_PATH_MAX" ] || { [ "$ended" = 0 ] && [ -n "$more" ]; }; }; then
+    CD_REFUSED="names no file$more (its path line must be at most $CD_PATH_MAX bytes)"; return 1
+  fi
+  [ -n "$rel" ] || { CD_REFUSED="names no file$more"; return 1; }
   case "$rel" in
     /*|'~'*) CD_REFUSED="must name its STATUS file by a path relative to its project folder"; return 1 ;;
   esac

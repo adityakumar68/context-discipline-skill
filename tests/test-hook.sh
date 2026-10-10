@@ -129,6 +129,11 @@ make_status "$long" '"y" * 8999 + "\n"'
 out=$(run_hook "$long")
 check "very long project path (${#long} chars): STATUS line + notice still fit under 10,000" \
   eval '[ "$(printf "%s" "$out" | units)" -le 10000 ] && has "$out" "loaded from"'
+printf '%s/STATUS.md\n' "$(printf 'x%.0s' $(seq 1 200))" > "$long/.claude/brain"
+out=$(printf '{"cwd": "%s"}' "$long" | env -u CLAUDE_PROJECT_DIR HOME="$HM" bash "$H" 2>"$T/err")
+check "project path + pointer path over 1,024 bytes: refused, nothing on stderr" \
+  eval 'refused "$out" "$long/.claude/brain" && [ ! -s "$T/err" ]'
+
 
 # --- finding the pointer ------------------------------------------------------------------------------------------
 point STATUS.md
@@ -149,6 +154,32 @@ check "no jq on PATH: input that is not a JSON object prints nothing" [ -z "$out
 
 printf '\357\273\277STATUS.md\r\n' > "$PTR"; out=$(run_hook "$P")
 check "pointer with a UTF-8 BOM and CRLF: still read" has "$out" project-p-status
+point STATUS.md
+
+# Only the first 4,096 bytes of a pointer are read, and its path line may be at most 1,024 bytes: a cloned repo's
+# pointer with a 1 MB line once took bash 3.2 about 20 s to trim (quadratic), at every session start.
+# writef <python expression>: write that text to project p's pointer.
+writef() { python3 -I -c 'import sys; open(sys.argv[1], "w").write(eval(sys.argv[2]))' "$PTR" "$1"; }
+writef '"a" * 1000000'
+start=$(python3 -I -c 'import time; print(time.time())')
+out=$(printf '{"cwd": "%s"}' "$P" | env -u CLAUDE_PROJECT_DIR HOME="$HM" perl -e 'alarm shift; exec @ARGV' 10 \
+  bash "$H" 2>"$T/err"); rc=$?
+ms=$(python3 -I -c "import time; print(int((time.time() - $start) * 1000))")
+check "1 MB path line: refused as naming no file, exit 0, in ${ms} ms (limit 2,000)" \
+  eval '[ $rc = 0 ] && refused "$out" "$PTR" && has "$out" "names no file" && [ "$ms" -lt 2000 ]'
+check "1 MB path line: nothing on stderr" eval '[ ! -s "$T/err" ]'
+writef '"a" * 1025 + "\n"'; out=$(run_hook "$P")
+check "path line of 1,025 bytes: refused as naming no file" eval 'refused "$out" "$PTR" && has "$out" "names no file"'
+writef '"#\n" * 2100 + "STATUS.md\n"'; out=$(run_hook "$P")
+check "path line after 4,096 bytes of comments: not read (names no file)" \
+  eval 'refused "$out" "$PTR" && has "$out" "names no file"'
+writef '"#" * 4086 + "\nSTATUS.md.old\n"'; out=$(run_hook "$P")
+check "path line cut at byte 4,096 (STATUS.md|.old): refused, never read as the shorter path" \
+  eval 'refused "$out" "$PTR" && has "$out" "names no file"'
+writef '"#" * 4085 + "\nSTATUS.md\n"'; out=$(run_hook "$P")
+check "path line whose newline is byte 4,096: read" has "$out" project-p-status
+writef '"#" * 4086 + "\nSTATUS.md"'; out=$(run_hook "$P")
+check "pointer of exactly 4,096 bytes ending in the path line (no newline): read" has "$out" project-p-status
 point STATUS.md
 
 # The walk stops before $HOME even when HOME is a symlink or the cwd contains "..", so a pointer in the
