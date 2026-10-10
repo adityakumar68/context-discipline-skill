@@ -41,7 +41,8 @@ out=$(echo "{\"cwd\": \"$T/fh/x\"}" | HOME="$T/fh" bash "$H")
 
 mkdir -p "$T/abs/.claude" "$T/abs/x"; echo "$T/proj/docs/STATUS.md" > "$T/abs/.claude/brain"
 out=$(echo "{\"cwd\": \"$T/abs/x\"}" | hook)
-printf '%s' "$out" | grep -q hello && ok "hook: absolute path in the pointer works" || no "hook absolute pointer"
+! printf '%s' "$out" | grep -q hello && printf '%s' "$out" | grep -qF "$T/abs/.claude/brain" \
+  && ok "hook: absolute path in the pointer is refused with a warning" || no "hook absolute pointer"
 
 start=$(python3 -c 'import time; print(time.time())')
 for i in 1 2 3 4 5 6 7 8 9 10; do echo "{\"cwd\": \"$T/proj/sub/dir\"}" | hook >/dev/null; done

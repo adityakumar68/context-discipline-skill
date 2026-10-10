@@ -6,10 +6,14 @@
 # Claude Code adds it to context on startup, resume, clear and compact.
 #
 # Pointer format: the first non-empty line not starting with "#" is the STATUS
-# path, relative to <dir> (an absolute path or "~/..." also works).
+# path, relative to <dir>. The hook prints it only if, with every symlink
+# resolved, it is a regular text file inside <dir>: absolute paths, "~/...", ".."
+# escapes and symlinks that leave <dir> are refused, because the hook runs in
+# every session and a downloaded repo could otherwise point it at any file.
 #
-# Contract: prints nothing and exits 0 when no pointer is found or anything goes
-# wrong. Never writes files, never touches the network, stays well under 100 ms.
+# Contract: prints nothing and exits 0 when no pointer is found. When a pointer
+# is found but refused, prints one warning line naming it (no file content) and
+# exits 0. Never writes files, never touches the network.
 # Stops before $HOME and "/" so ~/.claude (global config) is never read as a brain.
 
 MAX_BYTES=9500   # above this, print a cut version (hook output > 10,000 chars becomes a 2,000-char preview)
@@ -57,7 +61,31 @@ while [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "$home" ]; do
 done
 [ -z "$pointer" ] && exit 0
 
-# 3. Read the STATUS path from the pointer.
+# 3. Read the STATUS path from the pointer and accept only a text file inside <dir>.
+LC_ALL=C; export LC_ALL   # from here on, count and match bytes
+
+# refuse <reason>: one warning line naming the pointer (never the file's content), then stop.
+refuse() {
+  printf '(Project brain not loaded: %s %s.)\n' "$pointer" "$1"
+  exit 0
+}
+
+# physical <path>: <path> with every symlink resolved, its last part included. Fails if a folder is missing.
+physical() {
+  local p="$1" d b t n=0
+  while :; do
+    d=$(dirname -- "$p") && b=$(basename -- "$p") || return 1
+    d=$(cd -P -- "$d" 2>/dev/null && pwd -P) || return 1
+    case "$b" in .|..) return 1 ;; esac
+    if [ "$d" = / ]; then p="/$b"; else p="$d/$b"; fi
+    [ -L "$p" ] || break
+    n=$((n + 1)); [ "$n" -le 20 ] || return 1
+    t=$(readlink -- "$p") || return 1
+    case "$t" in /*) p="$t" ;; *) p="$d/$t" ;; esac
+  done
+  printf '%s\n' "$p"
+}
+
 rel=""
 while IFS= read -r line || [ -n "$line" ]; do
   line="${line%$'\r'}"
@@ -69,20 +97,27 @@ while IFS= read -r line || [ -n "$line" ]; do
   rel="$line"
   break
 done < "$pointer" 2>/dev/null
-[ -z "$rel" ] && exit 0
+[ -n "$rel" ] || refuse "names no file"
 
 case "$rel" in
-  /*) status="$rel" ;;
-  '~/'*) status="$home/${rel#\~/}" ;;
-  *) status="$dir/$rel" ;;
+  /*|'~'*) refuse "must name its STATUS file by a path relative to its project folder" ;;
 esac
-[ -f "$status" ] && [ -r "$status" ] || exit 0
+root=$(cd -P -- "$dir" 2>/dev/null && pwd -P) || exit 0
+status=$(physical "$root/$rel") || refuse "names a missing file"
+case "$status" in
+  "$root"/*) ;;
+  *) refuse "names a file outside its project folder" ;;
+esac
+[ -f "$status" ] || refuse "names a missing file, or something that is not a regular file"
+[ -r "$status" ] || refuse "names a file that cannot be read"
 
 # 4. Print it (cut if too large), then one line naming the source.
 size=$(wc -c < "$status" 2>/dev/null | tr -d '[:space:]')
 case "$size" in
   ''|*[!0-9]*) exit 0 ;;
 esac
+text=$(tr -d '\000' < "$status" 2>/dev/null | wc -c | tr -d '[:space:]')
+[ "$text" = "$size" ] || refuse "names a file that is not text"
 
 if [ "$size" -gt "$MAX_BYTES" ]; then
   head -c "$CUT_BYTES" "$status" 2>/dev/null
