@@ -73,7 +73,7 @@ md_lines() { grep -c 'context-discipline' "$1" 2>/dev/null || true; }
 
 # --- 1. Fresh home: no ~/.claude at all ----------------------------------------------------------------------
 H=$(new_home); C="$H/.claude"
-want="bash \"$C/skills/context-discipline/scripts/brain-hook.sh\""
+want='bash "$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh"'   # $HOME is expanded by the shell
 out=$(inst "$H" 2>&1); rc=$?
 check "fresh: exit 0" [ "$rc" = 0 ]
 check "fresh: skill copied, identical to the repo copy" same_tree "$REPO/context-discipline" "$C/skills/context-discipline"
@@ -271,6 +271,51 @@ PY
 inst "$H13" --uninstall >/dev/null 2>&1; rc=$?
 check "uninstall: removes the one-entry form and old matcher entries, keeps other hooks" \
   eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(ours()) == 0 and d == {\"hooks\": {\"SessionStart\": [{\"matcher\": \"startup\", \"hooks\": [{\"type\": \"command\", \"command\": \"echo keep-me\"}]}]}}"'
+
+# --- 14. A hook whose script does not exist is repaired, never reported as "unchanged" --------------------------
+H14=$(new_home); C="$H14/.claude"; mkdir -p "$C"
+cat > "$C/settings.json" <<'JSON'
+{"hooks": {"SessionStart": [
+  {"hooks": [{"type": "command", "command": "bash \"/no/such/olduser/.claude/skills/context-discipline/scripts/brain-hook.sh\""}]}
+]}}
+JSON
+out=$(inst "$H14" 2>&1); rc=$?
+check "stale hook path: replaced by the working command" \
+  eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "[c for _, _, c in ours()] == [A[0]]" "$want"'
+check "stale hook path: the summary names the missing script, and does not say unchanged" \
+  eval 'printf "%s" "$out" | grep -q "/no/such/olduser/.*does not exist" && ! printf "%s" "$out" | grep -q "settings.json: unchanged"'
+
+for form in 'bash ~/.claude/skills/context-discipline/scripts/brain-hook.sh' \
+            "bash \"$C/skills/context-discipline/scripts/brain-hook.sh\""; do
+  python3 -I - "$C/settings.json" "$form" <<'PY'
+import json, sys
+json.dump({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2]}]}]}}, open(sys.argv[1], "w"))
+PY
+  out=$(inst "$H14" 2>&1)
+  check "working hook command ($form): left as it is" \
+    eval 'printf "%s" "$out" | grep -q "settings.json: unchanged" && jq_ "$C/settings.json" "[c for _, _, c in ours()] == [A[0]]" "$form"'
+done
+
+# The command is written with $HOME, so a settings.json shared between two homes (dotfiles) runs in both.
+H15=$(new_home); H16=$(new_home); inst "$H15" >/dev/null 2>&1; inst "$H16" >/dev/null 2>&1
+cp "$H15/.claude/settings.json" "$H16/.claude/settings.json"; rm -rf "$H15"    # the other machine is gone
+out=$(inst "$H16" 2>&1)
+check "settings.json copied from another home: the hook is still valid there (unchanged)" \
+  eval 'printf "%s" "$out" | grep -q "settings.json: unchanged"'
+
+H17=$(new_home); CD="$ROOT/config-outside-home"
+env HOME="$H17" CLAUDE_CONFIG_DIR="$CD" bash "$INSTALL" >/dev/null 2>&1
+check "CLAUDE_CONFIG_DIR outside \$HOME: the hook command uses the absolute path" \
+  jq_ "$CD/settings.json" '[c for _, _, c in ours()] == [A[0]]' "bash \"$CD/skills/context-discipline/scripts/brain-hook.sh\""
+
+H18=$(new_home); mkdir -p "$H18/.claude"
+python3 -I - "$H18/.claude/settings.json" "$want" <<'PY'
+import json, sys
+json.dump({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2]}]}]}}, open(sys.argv[1], "w"))
+PY
+out=$(inst "$H18" --dry-run 2>&1)
+check "dry run before the skill is copied: the hook that will run it is not called stale" \
+  eval 'printf "%s" "$out" | grep -q "settings.json: unchanged"'
 
 echo "== install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

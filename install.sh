@@ -76,7 +76,7 @@ TS=$(date +%Y%m%d-%H%M%S)
 # Prints one human-readable result line per step; exits 3 (with a message on stderr) if settings.json is unusable.
 helper() {
   python3 -I - "$@" <<'PY'
-import filecmp, json, os, shutil, sys, tempfile
+import filecmp, json, os, shlex, shutil, sys, tempfile
 
 MARKER = "context-discipline/scripts/brain-hook.sh"
 SOURCES = "startup, resume, clear, compact, fork"   # what an entry with no matcher fires on (fork since 2.1.214)
@@ -154,9 +154,40 @@ def write_atomic(path, text):
         raise
 
 
-def dq(s):
-    """Double-quote s for a shell command line."""
-    return '"' + "".join("\\" + c if c in '\\"$`' else c for c in s) + '"'
+def esc(s):
+    """Escape s for use inside double quotes on a shell command line."""
+    return "".join("\\" + c if c in '\\"$`' else c for c in s)
+
+
+def hook_command(hook_path):
+    """The command for settings.json. Under $HOME it is written with $HOME, so a settings.json shared between
+    machines with different home folders (dotfiles) still finds the script on each."""
+    home = os.environ.get("HOME", "").rstrip("/")
+    if home and hook_path.startswith(home + "/"):
+        return 'bash "$HOME' + esc(hook_path[len(home):]) + '"'
+    return 'bash "' + esc(hook_path) + '"'
+
+
+def script_of(command):
+    """The brain-hook.sh path a hook command runs, with ~ and $HOME expanded. "" if the command cannot run
+    (unbalanced quotes); None if it cannot be told (other variables, or no path)."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return ""
+    for w in words:
+        if MARKER in w:
+            p = os.path.expanduser(os.path.expandvars(w))
+            return None if "$" in p else p
+    return None
+
+
+def missing_script(h, hook_path):
+    """The script path of our hook h if it does not exist (and is not the one this run installs), else None."""
+    p = script_of(h["command"])
+    if p is None or os.path.isfile(p) or os.path.realpath(p) == os.path.realpath(hook_path):
+        return None
+    return p or h["command"]
 
 
 def hooks_of(entry):
@@ -179,13 +210,15 @@ def label(entry):
     return "no matcher" if m is None else (m or '""')
 
 
-def plan_install(data, command):
-    """Edit data so hooks.SessionStart holds exactly one of our hooks, in an entry with no matcher (every source).
-    Returns ((verb, rest) describing the change, whether a new entry was added), or (None, False) if it holds."""
+def plan_install(data, command, hook_path):
+    """Edit data so hooks.SessionStart holds exactly one of our hooks, in an entry with no matcher (every source),
+    whose script exists. Returns ((verb, rest) describing the change, whether a new entry was added), or
+    (None, False) if it already holds."""
     hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
     entries = hooks.get("SessionStart", [])
     ours = [(e, h) for e in entries if isinstance(e, dict) for h in hooks_of(e) if is_ours(h)]
-    keep = next((h for e, h in ours if covers_all(e.get("matcher"))), None)
+    missing = [m for m in (missing_script(h, hook_path) for e, h in ours) if m]
+    keep = next((h for e, h in ours if covers_all(e.get("matcher")) and not missing_script(h, hook_path)), None)
     if keep is not None and len(ours) == 1:
         return None, False
     removed, kept_entries = [], []
@@ -203,10 +236,11 @@ def plan_install(data, command):
     data.setdefault("hooks", {})["SessionStart"] = kept_entries
     n = len(removed)
     old = f"{n} old SessionStart hook {'entry' if n == 1 else 'entries'} ({', '.join(removed)})"
+    gone = f"; the old hook ran {', '.join(sorted(set(missing)))}, which does not exist" if missing else ""
     if keep is not None:
-        return ("remove", f"{old}; the entry for every source stays"), False
+        return ("remove", f"{old}; the entry for every source stays{gone}"), False
     if removed:
-        return ("replace", f"{old} with one for every source ({SOURCES})"), True
+        return ("replace", f"{old} with one for every source ({SOURCES}){gone}"), True
     return ("add", f"one SessionStart hook for every source ({SOURCES})"), True
 
 
@@ -226,8 +260,8 @@ def cmd_check(path):
 
 def cmd_settings_install(path, hook_path, ts, dry):
     exists, data = load_settings(path)
-    command = "bash " + dq(hook_path)
-    what, added = plan_install(data, command)
+    command = hook_command(hook_path)
+    what, added = plan_install(data, command, hook_path)
     if what is None:
         print("settings.json: unchanged, the hook is already there (one SessionStart entry, every source)")
         return
