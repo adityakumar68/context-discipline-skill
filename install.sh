@@ -288,8 +288,18 @@ def said_all(plan, dry):
     return "; ".join(said(change, dry) for _, change, _, _ in plan)
 
 
-def dump(data):
-    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+def dump(data, like=None):
+    """data as JSON with 2-space indentation, ending in a newline unless the file it replaces (like) ends without
+    one."""
+    text = json.dumps(data, indent=2, ensure_ascii=False)
+    try:
+        with open(like, "rb") as f:
+            f.seek(-1, 2)
+            if f.read(1) != b"\n":
+                return text
+    except (OSError, TypeError, ValueError):
+        pass
+    return text + "\n"
 
 
 def need_writable(path):
@@ -342,7 +352,7 @@ def settings_install(path, scripts_dir, ts, dry):
                 print(f"               {event} runs: {command}")
         return
     saved = f"; backup: {backup(path, ts)}" if exists else "; created the file"
-    write_atomic(path, dump(data))
+    write_atomic(path, dump(data, path))
     print(f"settings.json: {said_all(plan, dry)}{saved}")
 
 
@@ -389,7 +399,7 @@ def cmd_settings_uninstall(path, ts, dry):
         print(f"settings.json: would remove {len(removed)} hook entries ({what}); backup first to {path}.bak-{ts}")
         return
     saved = backup(path, ts)
-    write_atomic(path, dump(data))
+    write_atomic(path, dump(data, path))
     print(f"settings.json: removed {len(removed)} hook entries ({what}); backup: {saved}")
 
 

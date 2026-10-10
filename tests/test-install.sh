@@ -460,6 +460,17 @@ check "uninstall: all three of our hooks removed, the user's PostCompact and Use
   eval '[ "$rc" = 0 ] && jq_ "$C/settings.json" "len(all_ours()) == 0 and d == {\"hooks\": {\"PostCompact\": [{\"matcher\": \"manual\", \"hooks\": [{\"type\": \"command\", \"command\": \"echo keep-compact\"}]}], \"UserPromptSubmit\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"echo keep-prompt\"}]}]}}"'
 check "uninstall: the summary counts 3 hook entries" eval 'printf "%s" "$out" | grep -q "removed 3 hook entries"'
 
+# settings.json keeps its final newline, or its lack of one (many editors and Claude Code write none).
+lastbyte() { tail -c 1 "$1" | od -An -c | tr -d ' '; }
+H29=$(new_home); mkdir -p "$H29/.claude"; printf '{\n  "model": "x"\n}' > "$H29/.claude/settings.json"
+inst "$H29" --skip-claude-md >/dev/null 2>&1
+check "install: settings.json without a final newline stays without one" eval '[ "$(lastbyte "$H29/.claude/settings.json")" = "}" ]'
+inst "$H29" --uninstall --skip-claude-md >/dev/null 2>&1
+check "uninstall: settings.json without a final newline stays without one" eval '[ "$(lastbyte "$H29/.claude/settings.json")" = "}" ]'
+H30=$(new_home); mkdir -p "$H30/.claude"; printf '{\n  "model": "x"\n}\n' > "$H30/.claude/settings.json"
+inst "$H30" --skip-claude-md >/dev/null 2>&1
+check "install: settings.json with a final newline keeps it" eval '[ "$(lastbyte "$H30/.claude/settings.json")" = "\\n" ]'
+
 out=$(inst "$H27" --help 2>&1)
 check "--help names the PostCompact and UserPromptSubmit hooks" \
   eval 'printf "%s" "$out" | grep -q PostCompact && printf "%s" "$out" | grep -q UserPromptSubmit'

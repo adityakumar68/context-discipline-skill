@@ -114,9 +114,9 @@ It works in `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`, and changes three thi
    works on each (a config folder outside `$HOME` gets absolute paths). Older entries for the same scripts are
    replaced, including the four `SessionStart` entries with matchers that earlier versions installed, and an entry
    whose script path no longer exists is repaired. Every other key and hook is kept. The file is edited with
-   python's `json` module (rewritten with 2-space indentation), written atomically, and first backed up to
-   `settings.json.bak-<timestamp>`. If it is not valid JSON, the installer stops and changes nothing. It warns if
-   `"disableAllHooks": true` is set.
+   python's `json` module (rewritten with 2-space indentation; a final newline, or its absence, is kept), written
+   atomically, and first backed up to `settings.json.bak-<timestamp>`. If it is not valid JSON, the installer stops
+   and changes nothing. It warns if `"disableAllHooks": true` is set.
 3. **One line in `~/.claude/CLAUDE.md`** (backed up first; skipped if a line already mentions
    `context-discipline`, or with `--skip-claude-md`). The line is shown under Manual install.
 
