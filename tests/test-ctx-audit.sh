@@ -129,5 +129,29 @@ printf '%s\n' "$out" | grep -q '^Output is a lower bound: 1 call' && ok "text: s
 grep -q 'until a compaction' "$A" && no "docstring still says content is re-read until a compaction" \
   || ok "docstring: no claim that everything is re-read until a compaction"
 
+# preview redaction: previews that look like credentials are replaced (over-redaction is the safe failure)
+# redacted <yes|no> <text>...: preview() redacts each text (yes) or leaves it readable (no).
+redacted() {
+  python3 -I - "$A" "$@" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ctx_audit", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+want = sys.argv[2] == "yes"
+wrong = [t for t in sys.argv[3:] if m.preview(t).startswith("[preview redacted") != want]
+for t in wrong:
+    print("   wrong: " + t)
+sys.exit(1 if wrong else 0)
+PY
+}
+redacted yes "echo 'Tr0ub4dor&3' | sudo -S nvidia-smi" "sudo -kS apt update" "mysql -u root -pHunter2xyz db" \
+  "curl http://admin:Hunter2xyz@gpuserver:8080/x" "git clone https://user:Hunter2xyz@example.org/r.git" \
+  "curl -u admin:Hunter2xyz https://h/api" \
+  && ok "redaction: sudo -S, mysql -p<password>, user:password@ in a URL, curl -u user:password" \
+  || no "redaction: sudo -S, mysql -p<password>, user:password@ in a URL, curl -u user:password"
+redacted no "ls -la src" "mkdir -p build/out" "grep -Pn foo bar.txt" "ssh -p 2222 host" "https://example.org/docs/a:b" \
+  "sudo nvidia-smi" && ok "redaction: ordinary commands and URLs stay readable" \
+  || no "redaction: ordinary commands and URLs stay readable"
+
 echo "== ctx-audit tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -216,8 +216,9 @@ python3 "$HOME/.claude/skills/context-discipline/scripts/ctx-audit.py" ~/.claude
 ```
 
 Transcripts live in `~/.claude/projects/<folder>/<session-id>.jsonl`, where the folder is the working directory with
-every character other than letters and digits replaced by `-`. Given the folder, it audits the newest transcript and
-reads that session's subagent transcripts automatically. `--include-sidechains` adds the subagents' content to the
+every character other than letters and digits replaced by `-`. Given the folder, it audits the newest transcript
+(while a session is running, that is usually the running one; pass a file to audit another) and reads that
+session's subagent transcripts automatically. `--include-sidechains` adds the subagents' content to the
 category table; `--json` prints a versioned JSON object for scripts. The text output looks like this:
 
 ```text

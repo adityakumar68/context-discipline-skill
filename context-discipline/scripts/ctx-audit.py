@@ -114,7 +114,10 @@ SECRET_RE = re.compile(
     r"\btoken\s*[=:]|(auth|access|refresh|api|github|gh|hf)[_ -]?token|"
     r"\bsk-[A-Za-z0-9]|\bghp_|\bgho_|github_pat_|\bxox[bp]-|\bAKIA[0-9A-Z]{8}|\bAIza|"
     r"[\w.+-]+@[\w-]+\.[\w.-]+|\b\d{1,3}(\.\d{1,3}){3}\b|"
-    r"(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,})",
+    r"(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}|"
+    # passwords given on a command line: echo pw | sudo -S, mysql -p<pw>, curl -u user:pw, scheme://user:pw@host
+    r"(?-i:\bsudo\b[^|;&\n]*\s-[A-Za-z]*S)|(?-i:\s-p[^\s-])|(?-i:\s(-u|--user)[\s=]*[^\s:]+:\S)|"
+    r"://[^/\s:@]+:[^/\s@]+@)",
     re.IGNORECASE,
 )
 
