@@ -30,6 +30,7 @@ TR="$T/tr"; mkdir -p "$TR"
 #   p:<ctx>:<uuid>  call with a fixed uuid          b:<uuid>[:<uuid>,...]  compact boundary, preserving those uuids
 #   u           user record                         big:<bytes>  user record with a large tool result
 #   bad         a line that is not JSON             cut         a truncated last line
+#   cutb:<uuid> a compact boundary still being written (its first 40 bytes, no newline: must be last)
 gen() {
   python3 -I - "$@" <<'PY'
 import json, sys
@@ -59,11 +60,12 @@ for spec in sys.argv[2:]:
         lines += [call(int(a[0]), mid="msg_same")] * 3
     elif k == "p":
         lines.append(call(int(a[0]), uuid=a[1]))
-    elif k == "b":
+    elif k in ("b", "cutb"):
         kept = a[1].split(",") if len(a) > 1 else []
-        lines.append(json.dumps({"type": "system", "subtype": "compact_boundary", "uuid": a[0], "isSidechain": False,
-                                 "compactMetadata": {"trigger": "auto", "preTokens": 1, "postTokens": 1,
-                                                     "preservedMessages": {"uuids": kept}}}, separators=(",", ":")))
+        b = json.dumps({"type": "system", "subtype": "compact_boundary", "uuid": a[0], "isSidechain": False,
+                        "compactMetadata": {"trigger": "auto", "preTokens": 1, "postTokens": 1,
+                                            "preservedMessages": {"uuids": kept}}}, separators=(",", ":"))
+        lines.append(b if k == "b" else b[:40])
     elif k == "u":
         lines.append(json.dumps({"type": "user", "isSidechain": False, "message": {"role": "user", "content": "hi"}}))
     elif k == "big":
@@ -74,7 +76,7 @@ for spec in sys.argv[2:]:
     elif k == "cut":
         lines.append(call(150000)[:60])
 with open(out, "w") as f:
-    f.write("\n".join(lines) + ("" if sys.argv[-1] == "cut" else "\n"))
+    f.write("\n".join(lines) + ("" if sys.argv[-1].split(":")[0] in ("cut", "cutb") else "\n"))
 PY
 }
 
@@ -153,6 +155,34 @@ gen "$TR/c" a:150000 b:B1:K1 p:160000:K1 u a:30000 u a:82000; run "$P" "$TR/c" "
 check "after a compaction the steps start again: note at 41%" nudged "41%"
 gen "$TR/c" a:150000 b:B1:K1 p:160000:K1 u a:30000 u a:84000; run "$P" "$TR/c" "$S3"
 check "and only once for that step" quiet
+# The compaction is found among everything written since the previous prompt, not only in the last 256 KB:
+# an auto-compaction can happen mid-turn, and the rest of the turn can write more than that.
+S4="sess-$((++k))"; gen "$TR/c4" a:150000; run "$P" "$TR/c4" "$S4"
+gen "$TR/c4" a:150000 b:B4 a:30000 big:400000 a:82000; run "$P" "$TR/c4" "$S4"
+check "compaction 400 KB before the prompt (a long turn after it): the steps start again, note at 41%" nudged "41%"
+gen "$TR/c4" a:150000 b:B4 a:30000 big:400000 a:82000 u a:84000; run "$P" "$TR/c4" "$S4"
+check "and the next prompt in that step: no repeat" quiet
+# A compaction from before the previous prompt, first seen now because a large record pushed the last call out of
+# the first read, is not a new compaction.
+S5="sess-$((++k))"; gen "$TR/c5" a:150000 b:B5 a:30000 big:300000 a:82000; run "$P" "$TR/c5" "$S5"
+check "first prompt of a session, compaction 300 KB back: note at 41%" nudged "41%"
+gen "$TR/c5" a:150000 b:B5 a:30000 big:300000 a:82000 big:500000; run "$P" "$TR/c5" "$S5"
+check "an old compaction seen for the first time is not a new one: no repeat note" quiet
+# A boundary still being written at the previous prompt is not skipped when it is complete.
+S6="sess-$((++k))"; gen "$TR/c6" a:150000 cutb:B6; run "$P" "$TR/c6" "$S6"
+check "boundary half-written at a prompt: note for the call before it (75%)" nudged "75%"
+gen "$TR/c6" a:150000 b:B6 u a:82000; run "$P" "$TR/c6" "$S6"
+check "that boundary, complete at the next prompt, starts the steps again: note at 41%" nudged "41%"
+# More than 16 MB written since the previous prompt is not all searched (the hook must stay fast); then a context
+# that has fallen since the previous prompt counts as a compaction. Finite 17 MB files, no endless source.
+S7="sess-$((++k))"; gen "$TR/c7" a:150000; run "$P" "$TR/c7" "$S7"
+gen "$TR/c7" a:150000 b:B7 big:17000000 a:82000; run "$P" "$TR/c7" "$S7"
+check "compaction 17 MB before the prompt (beyond the search): context fell, so the steps start again (41%)" \
+  nudged "41%"
+S8="sess-$((++k))"; gen "$TR/c8" a:150000; run "$P" "$TR/c8" "$S8"
+gen "$TR/c8" a:150000 big:17000000 a:160000; run "$P" "$TR/c8" "$S8"
+check "17 MB written, no compaction, context rose (80%): no repeat note" quiet
+rm -f "$TR/c7" "$TR/c8"
 
 # --- which records count --------------------------------------------------------------------------------------------
 gen "$TR/r" a:10000 s:150000; run "$P" "$TR/r" "sess-$((++k))"

@@ -56,9 +56,13 @@ instructions can trigger its prompt-injection defenses.
 
 - Measures the context of the last main-thread API call in `transcript_path`: `input_tokens` +
   `cache_creation_input_tokens` + `cache_read_input_tokens`, as `ctx-audit.py` does. Subagent, `<synthetic>` and
-  zero-usage records and records a compaction carried over are skipped. Only the end of the transcript is read.
+  zero-usage records and records a compaction carried over are skipped. Only the end of the transcript is read:
+  what was written since the previous prompt, at least 256 KB and at most 16 MB.
 - Notes at 40% of the window, then at 55, 70, 85 and 100%, once per step per session; the steps start again after a
-  compaction. The note is `hookSpecificOutput.additionalContext`, three lines:
+  compaction. To see a compaction, the hook searches everything written to the transcript since the previous prompt
+  (up to the last 16 MB) for its boundary record, so one early in a long turn is not missed; if more than 16 MB was
+  written, a context lower than at the previous prompt counts as a compaction. The note is
+  `hookSpecificOutput.additionalContext`, three lines:
   ```text
   Context check (context-discipline): this session's context is at 45% of its 200,000-token window (90,000 tokens).
   Do not stop mid-task. At the next natural break, update STATUS.md, and write a handoff note if a new sub-task is about to start.
@@ -69,7 +73,8 @@ instructions can trigger its prompt-injection defenses.
   `modelSettings.<model>` beats the top-level key); the model's window from the transcript (1,000,000 for `[1m]` and
   native 1M models, else 200,000); 200,000. The auto-compact values are capped at the model's window. The
   `--autocompact` launch flag is invisible to a hook.
-- State: one small file per session in `${TMPDIR:-/tmp}/context-discipline/`. Installed with a 5-second timeout;
+- State: one small file per session in `${TMPDIR:-/tmp}/context-discipline/` (the last step noted, how far the
+  transcript had got, the last context and compaction seen). Installed with a 5-second timeout;
   takes about 60 ms on a 60 MB transcript and about 12 ms outside brain projects. Needs python3 3.9+.
 - UserPromptSubmit also fires for scheduled tasks, `/loop` and background-subagent reports, so a note can arrive on
   those turns too.

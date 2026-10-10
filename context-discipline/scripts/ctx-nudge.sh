@@ -14,6 +14,11 @@
 # carry the same input usage, so the last record stands for its call. Only the end of the transcript is read
 # (256 KB, widened up to 16 MB when no call is found there), so the hook stays fast on long sessions.
 #
+# Compactions: the state file keeps how far the transcript had got at the previous prompt, and everything written
+# since then (up to the last 16 MB) is searched for a compaction boundary record, so a compaction early in a long
+# turn is still seen. If more than 16 MB was written since then, a context lower than at the previous prompt
+# counts as a compaction instead.
+#
 # Window, first that applies:
 #   1. $CD_CTX_WINDOW (tokens), used as given.
 #   2. The auto-compact window, as Claude Code resolves it: $CLAUDE_CODE_AUTO_COMPACT_WINDOW (a plain token
@@ -93,26 +98,40 @@ def parse(line):
     return r if isinstance(r, dict) else None
 
 
-def scan(chunk, cut_first):
-    """In one tail chunk, find the last compact boundary and the last call after it.
-    Returns None if the chunk has neither (read more), else (call record or None, boundary uuid or None)."""
-    lines = chunk.split(b"\n")
-    if cut_first:
-        lines = lines[1:]               # the chunk starts inside a line
-    start, boundary, kept = 0, None, set()
+def read_lines(f, start, end):
+    """(lines, base): the lines of f that start in [start, end), and the offset of the first. A line that starts
+    before start is left out. The last item is what follows the last newline: b"" if the range ends with one,
+    else a line still being written. ([], end) if no line starts in the range."""
+    begin = max(0, start - 1)
+    f.seek(begin)
+    data = f.read(end - begin)
+    if start > 0:
+        cut = data.find(b"\n") + 1      # one byte before start is read, so a line starting at start is kept
+        if cut == 0:
+            return [], end
+        data, begin = data[cut:], begin + cut
+    return data.split(b"\n"), begin
+
+
+def boundary_in(lines):
+    """(index, uuid, uuids carried over) of the last main-thread compact boundary in lines, or None."""
     for i in range(len(lines) - 1, -1, -1):
         if b"compact_boundary" not in lines[i]:
             continue
         r = parse(lines[i])
         if r and r.get("type") == "system" and r.get("subtype") == "compact_boundary" and not r.get("isSidechain"):
-            boundary = r.get("uuid") if isinstance(r.get("uuid"), str) else ""
             meta = r.get("compactMetadata") if isinstance(r.get("compactMetadata"), dict) else {}
             pm = meta.get("preservedMessages") if isinstance(meta.get("preservedMessages"), dict) else {}
+            kept = set()
             for key in ("uuids", "allUuids"):
                 if isinstance(pm.get(key), list):
                     kept.update(u for u in pm[key] if isinstance(u, str))
-            start = i + 1
-            break
+            return i, (r.get("uuid") if isinstance(r.get("uuid"), str) else ""), kept
+    return None
+
+
+def call_in(lines, start, kept):
+    """The record of the last main-thread call in lines[start:], or None."""
     for i in range(len(lines) - 1, start - 1, -1):
         line = lines[i]
         if b"\"assistant\"" not in line or b"usage" not in line:
@@ -124,23 +143,37 @@ def scan(chunk, cut_first):
         if not isinstance(msg, dict) or msg.get("model") == "<synthetic>" or not isinstance(msg.get("usage"), dict):
             continue
         if sum(num(msg["usage"].get(k)) for k in CONTEXT_KEYS) > 0:
-            return r, boundary
-    return (None, boundary) if boundary is not None else None
+            return r
+    return None
 
 
-def last_call(path):
+def last_call(path, since):
+    """Read the end of the transcript. since: the offset it had reached at the previous prompt (None if unknown).
+    Returns (call, boundary, new, done, unsearched):
+      call       the last main-thread call after the last compaction (None if there is none yet)
+      boundary   the uuid of that compaction's boundary record ("" if it has none, None if none was found)
+      new        whether that boundary was written at or after since (always True when since is None)
+      done       the offset just past the last complete line (None if unknown), the next prompt's since
+      unsearched whether more than MAX_TAIL bytes were written since since, so a compaction may be unseen."""
     with open(path, "rb") as f:
         size = f.seek(0, 2)
-        n = TAIL
+        if since is not None and not 0 <= since <= size:
+            since = None                # the file was replaced or cut: start over
+        n = TAIL if since is None else max(TAIL, size - since)   # all that was written since the previous prompt
         while True:
-            start = max(0, size - n)
-            f.seek(start)
-            found = scan(f.read(size - start), start > 0)
-            if found is not None:
-                return found
-            if start == 0 or n >= MAX_TAIL:
-                return None, None
+            start = max(0, size - min(n, MAX_TAIL))
+            lines, base = read_lines(f, start, size)
+            b = boundary_in(lines)
+            call = call_in(lines, b[0] + 1 if b else 0, b[2] if b else set())
+            if call is not None or b is not None or start == 0 or n >= MAX_TAIL:
+                break
             n *= 4
+    done = size - len(lines[-1]) if lines else None
+    new = True
+    if b is not None and since is not None:
+        new = base + sum(len(x) + 1 for x in lines[:b[0]]) >= since
+    unsearched = since is not None and size - since > MAX_TAIL
+    return call, (b[1] if b else None), new, done, unsearched
 
 
 def truthy(v):
@@ -236,9 +269,6 @@ def main():
     path = hook.get("transcript_path")
     if not isinstance(path, str) or not os.path.isfile(path):
         return
-    rec, boundary = last_call(path)
-    if rec is None and boundary is None:
-        return
     folder = state_dir()
     if folder is None:
         return
@@ -250,14 +280,29 @@ def main():
     if not isinstance(state, dict):
         state = {}
     old = dict(state)
-    step = state.get("step") if isinstance(state.get("step"), int) else -1
-    if boundary is not None and boundary != state.get("boundary"):
-        step = -1                       # a compaction since the last note: the steps start again
+
+    def count(key):
+        v = state.get(key)
+        return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+    rec, boundary, new, done, unsearched = last_call(path, count("size"))
+    if rec is None and boundary is None:
+        return
+    step = count("step")
+    step = -1 if step is None else step
+    ctx = None
+    if rec is not None:
+        ctx = sum(num(rec["message"]["usage"].get(k)) for k in CONTEXT_KEYS)
+    if boundary is not None and new and boundary != state.get("boundary"):
+        step = -1                       # a compaction since the previous prompt: the steps start again
         state["boundary"] = boundary
+    elif unsearched and ctx is not None and count("ctx") is not None and ctx < count("ctx"):
+        step = -1                       # too much written since then to search, but the context fell: a compaction
+    if done is not None:
+        state["size"] = done
     note = None
     if rec is not None:
-        u = rec["message"]["usage"]
-        ctx = sum(num(u.get(k)) for k in CONTEXT_KEYS)
+        state["ctx"] = ctx
         project = os.environ.get("CLAUDE_PROJECT_DIR") or hook.get("cwd")
         window = window_of(rec, ctx, project if isinstance(project, str) else "")
         pct = ctx * 100 / window
