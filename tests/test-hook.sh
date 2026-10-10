@@ -134,6 +134,14 @@ out=$(printf '{"cwd": "%s"}' "$long" | env -u CLAUDE_PROJECT_DIR HOME="$HM" bash
 check "project path + pointer path over 1,024 bytes: refused, nothing on stderr" \
   eval 'refused "$out" "$long/.claude/brain" && [ ! -s "$T/err" ]'
 
+# The trim notice names the file, so a long file name must not push the output over the cap.
+deep="$HM/c"; while [ ${#deep} -lt 560 ]; do deep="$deep/dddddddddddddddddddddddddddddd"; done
+name="$(printf 'S%.0s' $(seq 1 247)).md"
+mkdir -p "$deep/.claude"; echo "$name" > "$deep/.claude/brain"
+python3 -I -c 'import sys; open(sys.argv[1], "w").write("a" * 12000)' "$deep/$name"
+out=$(run_hook "$deep")
+check "251-char file name under a ${#deep}-char folder, 12,000-char STATUS: notice shown, output under 10,000" \
+  eval 'has "$out" "characters, over the" && [ "$(printf "%s" "$out" | units)" -le 10000 ]'
 
 # --- finding the pointer ------------------------------------------------------------------------------------------
 point STATUS.md

@@ -49,7 +49,10 @@ status="$CD_STATUS"; size="$CD_SIZE"
 # Characters are counted as Claude Code counts them: JavaScript string length, so most characters are 1
 # and emoji (4-byte UTF-8) are 2. Bytes are never fewer, so a file of at most $budget bytes always fits.
 loaded="(Project brain loaded from $status. Working rules: context-discipline skill.)"
-budget=$((CAP - 200 - ${#loaded}))   # 200: room for the trim notice; ${#loaded} counts bytes (>= characters)
+name=$(basename -- "$status" 2>/dev/null) || name=""
+# 200: room for the trim notice's fixed text and numbers, plus the file name it gives; ${#...} counts bytes
+# (>= characters)
+budget=$((CAP - 200 - ${#name} - ${#loaded}))
 [ "$budget" -gt "$LIMIT" ] && budget=$LIMIT
 
 chars=$size
@@ -80,7 +83,7 @@ if [ "$chars" -gt "$budget" ]; then
   case "${1:-}${2:-}" in ''|*[!0-9]*) exit 0 ;; esac
   head -c "$1" "$status" 2>/dev/null
   printf '\n[%s is %s characters, over the %s limit, so only the first %s are shown here. Trim it so nothing is cut.]\n' \
-    "$(basename -- "$status")" "$(commas "$chars")" "$(commas "$budget")" "$(commas "$2")"
+    "$name" "$(commas "$chars")" "$(commas "$budget")" "$(commas "$2")"
 else
   cat "$status" 2>/dev/null
   # keep the closing line on its own line even if the file lacks a final newline
