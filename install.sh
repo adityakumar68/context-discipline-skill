@@ -23,8 +23,9 @@ Installs the context-discipline skill for Claude Code into $CLAUDE_CONFIG_DIR, o
   2. Hooks:     adds three hooks to <dir>/settings.json, each in one entry with no matcher (older
                 entries for the same hook are replaced), running skills/context-discipline/scripts/...
                   SessionStart     brain-hook.sh   every source (startup, resume, clear, compact, fork):
-                                                   prints the project's STATUS file
+                                                   prints the project's STATUS file (10-second timeout)
                   PostCompact      compact-log.sh  every compaction: saves the summary in the project
+                                                   (10-second timeout)
                   UserPromptSubmit ctx-nudge.sh    every prompt: a short note at 40% of the context
                                                    window and every 15% after (5-second timeout)
                 The last two act only in projects with a brain (.claude/brain).
@@ -88,8 +89,9 @@ import filecmp, json, os, shlex, shutil, sys, tempfile
 PREFIX = "context-discipline/scripts/"
 # (event, script, what an entry with no matcher fires on, extra fields of a new entry)
 HOOKS = (
-    ("SessionStart", "brain-hook.sh", "every source", " (startup, resume, clear, compact, fork)", {}),  # fork: 2.1.214+
-    ("PostCompact", "compact-log.sh", "every compaction", " (manual and auto)", {}),
+    ("SessionStart", "brain-hook.sh", "every source", " (startup, resume, clear, compact, fork)",
+     {"timeout": 10}),  # fork: 2.1.214+
+    ("PostCompact", "compact-log.sh", "every compaction", " (manual and auto)", {"timeout": 10}),
     ("UserPromptSubmit", "ctx-nudge.sh", "every prompt", "", {"timeout": 5}),
 )
 SCRIPTS = tuple(h[1] for h in HOOKS)

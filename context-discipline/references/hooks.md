@@ -29,7 +29,8 @@ three exit 0 on every path and never use the network.
   `[STATUS.md is N characters, over the 9,000 limit, so only the first 9,000 are shown here. Trim it so nothing is cut.]`.
   The reason: Claude Code replaces hook output over 10,000 characters with a file path and a 2,000-character
   preview, and does not ask Claude to read the file.
-- No pointer, or input that is not a JSON object: prints nothing. Takes about 30 ms (about 60 ms when it cuts).
+- No pointer, or input that is not a JSON object: prints nothing. Takes about 30 ms (about 60 ms when it cuts);
+  installed with a 10-second timeout, as is `compact-log.sh`.
 
 **Why a global hook:** Claude Code reads a project's `.claude/settings.json` only from the session's primary working
 directory, so a project-level hook misses sessions started in a subfolder. The walk-up covers any subfolder of the
@@ -88,10 +89,10 @@ Preferred: `./install.sh` from the repo (`--dry-run` shows every change). By han
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh\"" } ] }
+      { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh\"", "timeout": 10 } ] }
     ],
     "PostCompact": [
-      { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/compact-log.sh\"" } ] }
+      { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/compact-log.sh\"", "timeout": 10 } ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/ctx-nudge.sh\"", "timeout": 5 } ] }

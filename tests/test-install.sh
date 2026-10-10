@@ -53,8 +53,8 @@ full_settings() {
 import json, sys
 cmd = lambda s: 'bash "$HOME/.claude/skills/context-discipline/scripts/%s"' % s
 json.dump({"hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2]}]}],
-    "PostCompact": [{"hooks": [{"type": "command", "command": cmd("compact-log.sh")}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": sys.argv[2], "timeout": 10}]}],
+    "PostCompact": [{"hooks": [{"type": "command", "command": cmd("compact-log.sh"), "timeout": 10}]}],
     "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd("ctx-nudge.sh"), "timeout": 5}]}]}},
     open(sys.argv[1], "w"))
 PY
@@ -99,10 +99,10 @@ out=$(inst "$H" 2>&1); rc=$?
 check "fresh: exit 0" [ "$rc" = 0 ]
 check "fresh: skill copied, identical to the repo copy" same_tree "$REPO/context-discipline" "$C/skills/context-discipline"
 check "fresh: scripts are executable" [ -x "$C/skills/context-discipline/scripts/brain-hook.sh" ]
-check "fresh: settings.json has one SessionStart entry, with no matcher (every source), running the hook" \
-  jq_ "$C/settings.json" 'd["hooks"]["SessionStart"] == [{"hooks": [{"type": "command", "command": A[0]}]}]' "$want"
-check "fresh: one PostCompact entry, with no matcher (manual and auto), running compact-log.sh" \
-  jq_ "$C/settings.json" 'd["hooks"]["PostCompact"] == [{"hooks": [{"type": "command", "command": A[0]}]}]' "$want_cl"
+check "fresh: settings.json has one SessionStart entry, with no matcher (every source), running the hook, 10-second timeout" \
+  jq_ "$C/settings.json" 'd["hooks"]["SessionStart"] == [{"hooks": [{"type": "command", "command": A[0], "timeout": 10}]}]' "$want"
+check "fresh: one PostCompact entry, with no matcher (manual and auto), running compact-log.sh, 10-second timeout" \
+  jq_ "$C/settings.json" 'd["hooks"]["PostCompact"] == [{"hooks": [{"type": "command", "command": A[0], "timeout": 10}]}]' "$want_cl"
 check "fresh: one UserPromptSubmit entry running ctx-nudge.sh, with a 5-second timeout" \
   jq_ "$C/settings.json" 'd["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": A[0], "timeout": 5}]}]' "$want_cn"
 check "fresh: no other hook events or settings keys" jq_ "$C/settings.json" 'list(d) == ["hooks"] and len(d["hooks"]) == 3'

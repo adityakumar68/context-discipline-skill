@@ -108,8 +108,8 @@ It works in `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`, and changes three thi
    there is first moved to `~/.claude/skill-backups/context-discipline.bak-<timestamp>` (outside `skills/`, so
    Claude Code does not load it as a second skill).
 2. **The hooks.** Adds three hooks to `~/.claude/settings.json`, each in one entry with no matcher:
-   `SessionStart` runs `brain-hook.sh`, `PostCompact` runs `compact-log.sh`, and `UserPromptSubmit` runs
-   `ctx-nudge.sh` with a 5-second timeout. Each command reads
+   `SessionStart` runs `brain-hook.sh` and `PostCompact` runs `compact-log.sh`, each with a 10-second timeout, and
+   `UserPromptSubmit` runs `ctx-nudge.sh` with a 5-second timeout. Each command reads
    `bash "$HOME/.claude/skills/context-discipline/scripts/<script>"`, so a settings file synced between machines
    works on each (a config folder outside `$HOME` gets absolute paths). Older entries for the same scripts are
    replaced, including the four `SessionStart` entries with matchers that earlier versions installed, and an entry
@@ -132,10 +132,10 @@ steps already done are skipped.
    {
      "hooks": {
        "SessionStart": [
-         { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh\"" } ] }
+         { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh\"", "timeout": 10 } ] }
        ],
        "PostCompact": [
-         { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/compact-log.sh\"" } ] }
+         { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/compact-log.sh\"", "timeout": 10 } ] }
        ],
        "UserPromptSubmit": [
          { "hooks": [ { "type": "command", "command": "bash \"$HOME/.claude/skills/context-discipline/scripts/ctx-nudge.sh\"", "timeout": 5 } ] }
