@@ -143,6 +143,15 @@ check "/brain none: says so, exit 0" eval '[ $rc = 0 ] && has "$out" "This windo
 check "/brain none: the hooks print nothing in project a" eval '[ -z "$(hookout "$HM/a")" ]'
 bc "$HM/a"
 check "list after /brain none: says no brain, chosen with /brain none" has "$out" "This window uses no brain (chosen with /brain none)"
+# The recorded start time must not depend on the locale or time zone of whoever writes or reads it.
+LOC=$(locale -a 2>/dev/null | grep -m1 -E '^(fr_FR|de_DE)\.(UTF-8|utf8)$')
+bc "$HM/a" ${LOC:+LC_ALL=$LOC} TZ=Pacific/Kiritimati -- none
+check "/brain none written under another locale (${LOC:-none found}) and time zone: the hooks still honour it" \
+  eval '[ -z "$(hookout "$HM/a")" ]'
+bc "$HM/a" ${LOC:+LC_ALL=$LOC} TZ=Pacific/Kiritimati -- alpha
+check "/brain alpha written under another locale and time zone: the hooks load alpha" \
+  eval 'has "$(hookout "$HM/a" TZ=UTC)" "(brain \"alpha\", chosen with /brain)"'
+bc "$HM/a" none
 cp "$SES/pid-$$" "$T/choice.before"
 bc "$HM/a" zzz
 check "/brain <unregistered name>: refused, lists the names, choice unchanged" \

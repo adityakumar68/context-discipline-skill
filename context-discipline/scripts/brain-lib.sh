@@ -182,11 +182,12 @@ cd_valid_name() {
 # for messages.
 cd_printable() { printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '?' | head -c "${2:-64}"; }
 
-# cd_process_start <pid>: when process <pid> started, as ps prints it ("" if ps cannot tell). Kept with a
-# window's choice, so a later process that gets the same PID does not inherit the choice.
+# cd_process_start <pid>: when process <pid> started, as ps prints it in the C locale and UTC ("" if ps cannot
+# tell), so the writer and the readers agree whatever their locale and time zone. Kept with a window's choice, so a
+# later process that gets the same PID does not inherit the choice.
 cd_process_start() {
   local s
-  s=$(ps -o lstart= -p "$1" 2>/dev/null | LC_ALL=C tr -cd 'A-Za-z0-9: ' | tr -s ' ')
+  s=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | LC_ALL=C tr -cd 'A-Za-z0-9: ' | LC_ALL=C tr -s ' ')
   s="${s# }"; printf '%s\n' "${s% }"
 }
 
