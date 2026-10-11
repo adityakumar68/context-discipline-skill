@@ -9,7 +9,7 @@ allowed-tools:
 ---
 !`bash "${CLAUDE_SKILL_DIR}/../context-discipline/scripts/brain.sh" $ARGUMENTS`
 
-The output above is from the /brain command, which has already done what the user asked. Show the user that
-output as it is (but if it ends with a project brain's STATUS, say in one line which brain is now in use instead of
-repeating the STATUS), then stop: run no tools. If it printed a STATUS, that is this session's project brain from
-now on, in place of any loaded earlier; if it chose no brain, disregard any project STATUS loaded earlier.
+The /brain command above has already done what the user asked. Relay its output to the user as it is; when it ends
+with a project brain's STATUS, give one line naming the brain now in use in place of that STATUS. Then end your turn.
+A STATUS printed here is this session's project brain from now on, replacing any loaded earlier; when the command
+chose no brain, the session has none.

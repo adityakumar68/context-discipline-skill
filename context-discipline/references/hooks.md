@@ -10,10 +10,23 @@ What the three global hooks do, how to install, test and troubleshoot them, and 
 | `PostCompact` | `compact-log.sh` | saves the compaction summary in the project |
 | `UserPromptSubmit` | `ctx-nudge.sh` | adds a context-check note as the context window fills |
 
-All three share `brain-lib.sh`: they walk up from the session's `cwd` (else `$CLAUDE_PROJECT_DIR`, then `$PWD`) to
-the nearest `<dir>/.claude/brain` pointer, stopping before `$HOME` and `/`, so `~/.claude` is never taken for a
-project. A project with an accepted pointer is a *brain project*; the last two hooks do nothing anywhere else. All
-three exit 0 on every path and never use the network.
+All three pick the session's brain with one shared function (`cd_select_brain` in `brain-lib.sh`), first match wins:
+
+1. the choice made with `/brain <name>` or `/brain none` in this Claude Code window: the file
+   `<config>/brain-sessions/pid-$CLAUDE_PID` (else `sid-<session id>`), `<config>` being `$CLAUDE_CONFIG_DIR` or
+   `~/.claude`. `$CLAUDE_PID` is the Claude Code process, set for hooks and for the Bash tool alike, so the choice
+   survives `/clear` (which starts a new session id) and compaction. The file also holds when that process started,
+   so a later process that reuses the PID does not inherit it.
+2. `CD_BRAIN=<name>` or `CD_BRAIN=none` in the environment.
+3. the walk-up from the session's `cwd` (else `$CLAUDE_PROJECT_DIR`, then `$PWD`) to the nearest
+   `<dir>/.claude/brain` pointer, stopping before `$HOME` and `/`, so `~/.claude` is never taken for a project.
+
+A name is looked up in `<config>/brains.json`, `{"version": 1, "brains": {"<name>": {"root": "<abs folder>",
+"status": "<abs STATUS path>"}}}`, which `/brain` (`scripts/brain.sh`) writes. The registry is read only if it is a
+regular file of at most 1,000,000 bytes, opened non-blocking (python3 needed). A registered STATUS gets the same
+checks as a pointer's: a regular text file inside its project folder, which may not be `$HOME` or `/`.
+`none`, or no brain found, means the hooks do nothing (brain-hook.sh prints nothing). All three exit 0 on every path
+and never use the network.
 
 ## SessionStart: brain-hook.sh
 
@@ -21,9 +34,13 @@ three exit 0 on every path and never use the network.
   matcher, so sources Claude Code adds later are covered too.
 - The pointer's first non-empty line not starting with `#` is the STATUS path, relative to `<dir>`. Only the
   pointer's first 4,096 bytes are read, and the path line may be at most 1,024 bytes. Absolute paths, `~/...`, `..`
-  escapes and symlinks that leave `<dir>` are refused, and so are folders, missing files and binary files. A refused pointer prints one line, `(Project brain not loaded: <pointer> <reason>.)`, and no file content.
+  escapes and symlinks that leave `<dir>` are refused, and so are folders, missing files and binary files. A
+  refused pointer prints one line, `(Project brain not loaded: <pointer> <reason>.)`, and no file content. A chosen
+  name that is not registered, or whose entry is refused, prints
+  `(Project brain not loaded: brain "<name>" (chosen with /brain) <reason>.)` (or `chosen with CD_BRAIN`).
 - An accepted file is printed as plain stdout, which Claude Code adds to context for `SessionStart`, followed by
-  `(Project brain loaded from <path>. Working rules: context-discipline skill.)`.
+  `(Project brain loaded from <path>. Working rules: context-discipline skill.)`; for a named brain,
+  `(Project brain loaded from <path> (brain "<name>", chosen with /brain). Working rules: ...)`.
 - **Size limit: 9,000 characters**, counted as Claude Code counts them (an emoji counts 2; check with `wc -m`). A
   longer file is cut at a character boundary after 9,000 characters, followed by
   `[STATUS.md is N characters, over the 9,000 limit, so only the first 9,000 are shown here. Trim it so nothing is cut.]`.
@@ -46,7 +63,8 @@ instructions can trigger its prompt-injection defenses.
 ## PostCompact: compact-log.sh
 
 - Input: `compact_summary` (the summary Claude Code wrote), `session_id`, `trigger` (`manual` or `auto`).
-- Writes `<root>/.claude/compactions/<YYYY-MM-DD-HHMMSS>-<first 8 of session id>.md`: a heading with date, trigger
+- Writes `<root>/.claude/compactions/<YYYY-MM-DD-HHMMSS>-<first 8 of session id>.md`, `<root>` being the chosen
+  brain's project folder (whatever folder the session is in): a heading with date, trigger
   and session, then the summary verbatim. Files are owner-only (mode 600) and never overwritten; a
   `.claude/compactions` that is a symlink out of the project is refused.
 - `init-brain.sh` adds `.claude/compactions/` to the project's `.gitignore`, because a summary can quote anything the
@@ -83,8 +101,8 @@ instructions can trigger its prompt-injection defenses.
 
 ## Install (edits global settings: ask the user first)
 
-Preferred: `./install.sh` from the repo (`--dry-run` shows every change). By hand, copy the skill folder to
-`~/.claude/skills/` and merge into `~/.claude/settings.json` (with `CLAUDE_CONFIG_DIR` set, use that folder instead
+Preferred: `./install.sh` from the repo (`--dry-run` shows every change). By hand, copy the skill folder and the
+repo's `brain/` folder (the `/brain` command) to `~/.claude/skills/` and merge into `~/.claude/settings.json` (with `CLAUDE_CONFIG_DIR` set, use that folder instead
 of `~/.claude` throughout):
 
 ```json
@@ -123,6 +141,8 @@ echo '{"cwd": "'"$P"'", "session_id": "test0001", "trigger": "manual", "compact_
 T=$(mktemp); echo '{"type":"assistant","message":{"id":"m1","model":"claude-x","usage":{"input_tokens":90000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}' > "$T"
 echo '{"cwd": "'"$P"'", "session_id": "nudge-'$RANDOM'", "transcript_path": "'"$T"'"}' \
   | CD_CTX_WINDOW=200000 bash "$H/ctx-nudge.sh"                                # the note, at 45%
+echo '{"cwd": "/tmp"}' | CD_BRAIN=<name> bash "$H/brain-hook.sh"                  # a registered brain's STATUS
+bash "$H/brain.sh"                                                            # the registry, as /brain lists it
 ```
 
 ## Troubleshoot
@@ -131,7 +151,8 @@ echo '{"cwd": "'"$P"'", "session_id": "nudge-'$RANDOM'", "transcript_path": "'"$
 |---|---|
 | Nothing injected | `grep -n context-discipline/scripts "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"`; does the pipe test print? Is the pointer at `<project>/.claude/brain`, naming an existing file by a relative path? Is the project folder something other than `$HOME` itself (or `/`)? Is `CD_HOOKS=off` set? |
 | `(Project brain not loaded: ...)` | The pointer was refused; the line gives the reason. Use a relative path to a text file inside the project. |
-| Wrong STATUS injected | The nearest pointer wins: a nested project's `.claude/brain` shadows its parent's. |
+| Wrong STATUS injected | `/brain` shows which brain this window uses and why: a `/brain` choice beats `CD_BRAIN`, which beats the folder. In the walk-up, the nearest pointer wins: a nested project's `.claude/brain` shadows its parent's. |
+| `(Project brain not loaded: brain "x" ...)` | The chosen name is not registered (renamed or removed?) or its entry is refused; `/brain` lists the registry, `/brain <name>` or `/brain none` picks again. |
 | Trim notice in context | STATUS is over 9,000 characters: move history to the overview's decision log. |
 | STATUS appears twice | An older per-project hook also prints it; remove one. |
 | No context-check note | Not a brain project, the step was already noted this session, no python3, or the window is larger than you think (`CD_CTX_WINDOW` overrides it). |
@@ -151,6 +172,7 @@ echo '{"cwd": "'"$P"'", "session_id": "nudge-'$RANDOM'", "transcript_path": "'"$
 ## Disable
 
 For one run (headless `claude -p`, SDK agents, evals, a benchmark's baseline): set `CD_HOOKS=off` in its
-environment and all three hooks do nothing. For one project: delete `<project>/.claude/brain`. Everywhere:
+environment and all three hooks do nothing. For one window: `/brain none`. For one project: delete
+`<project>/.claude/brain`. Everywhere:
 `./install.sh --uninstall` from the repo, or remove the three entries above from `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` (an older
 install may have four `SessionStart` entries with matchers; `--uninstall` removes both forms).

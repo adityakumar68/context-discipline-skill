@@ -38,7 +38,7 @@ from a measurement.)
 
 - **The skill** (`context-discipline/SKILL.md`): where each kind of information lives, the delegation contract,
   design → spec → plan with subagents, cheap reviews, and how to handle compaction.
-- **Three hooks**, active only in projects with a brain:
+- **Three hooks**, active only when the session has a brain:
   - `SessionStart` (`brain-hook.sh`) prints the project's STATUS file on startup, resume, `/clear`, compaction and
     fork, so the current state is back in context automatically.
   - `PostCompact` (`compact-log.sh`) saves each compaction summary to `.claude/compactions/` in the project, so you
@@ -48,6 +48,8 @@ from a measurement.)
 - **A project brain** (`scripts/init-brain.sh`): `STATUS.md` (current state), `00-Project-Overview.md` (big picture
   and dated decision log), the `.claude/brain` pointer the hooks follow, and a `.gitignore` line for the
   compaction logs.
+- **Named brains** (`/brain`, a small user-invoked skill running `scripts/brain.sh`): register brains by name and
+  pick one per Claude Code window, for folders that hold several projects. See [Several brains](#several-brains).
 - **Agent brief templates** (`references/agent-briefs.md`): research, context gathering, spec and plan drafting,
   implementation, review and fact-checking, each with a short hand-back contract.
 - **ctx-audit** (`scripts/ctx-audit.py`): measures a past session's context from API usage (peaks, compactions,
@@ -73,7 +75,8 @@ prints ~/code/app/STATUS.md and "(Project brain loaded from ...)"  ->  Claude re
 ```
 
 The other two hooks find the project the same way. The pointer must name a text file inside the project by a
-relative path; anything else is refused with a one-line warning.
+relative path; anything else is refused with a one-line warning. A brain picked by name (`/brain <name>` in the
+window, or `CD_BRAIN=<name>` at launch) takes the place of the walk-up for all three hooks; see Several brains.
 
 The delegation contract, which the skill applies to every subagent:
 
@@ -102,12 +105,15 @@ and UserPromptSubmit hooks are listed, and restart Claude Code only if they are 
 
 ## What the installer changes
 
-It works in `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`, and changes three things:
+It works in `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`, and changes four things:
 
 1. **The skill.** Copies `context-discipline/` to `~/.claude/skills/context-discipline/`. A different copy already
    there is first moved to `~/.claude/skill-backups/context-discipline.bak-<timestamp>` (outside `skills/`, so
    Claude Code does not load it as a second skill).
-2. **The hooks.** Adds three hooks to `~/.claude/settings.json`, each in one entry with no matcher:
+2. **The `/brain` skill.** Copies `brain/` to `~/.claude/skills/brain/` with the same backup rule. A different skill
+   already called `brain` (one that does not run this repo's `brain.sh`) is left alone, and the summary says
+   `/brain` was not installed.
+3. **The hooks.** Adds three hooks to `~/.claude/settings.json`, each in one entry with no matcher:
    `SessionStart` runs `brain-hook.sh` and `PostCompact` runs `compact-log.sh`, each with a 10-second timeout, and
    `UserPromptSubmit` runs `ctx-nudge.sh` with a 5-second timeout. Each command reads
    `bash "$HOME/.claude/skills/context-discipline/scripts/<script>"`, so a settings file synced between machines
@@ -117,7 +123,7 @@ It works in `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`, and changes three thi
    python's `json` module (rewritten with 2-space indentation; a final newline, or its absence, is kept), written
    atomically, and first backed up to `settings.json.bak-<timestamp>`. If it is not valid JSON, the installer stops
    and changes nothing. It warns if `"disableAllHooks": true` is set.
-3. **One line in `~/.claude/CLAUDE.md`** (backed up first; skipped if a line already mentions
+4. **One line in `~/.claude/CLAUDE.md`** (backed up first; skipped if a line already mentions
    `context-discipline`, or with `--skip-claude-md`). The line is shown under Manual install.
 
 Run `./install.sh --dry-run` to see every planned change without making any. Running the installer again is safe:
@@ -125,7 +131,7 @@ steps already done are skipped.
 
 ## Manual install
 
-1. Copy the skill: `mkdir -p ~/.claude/skills && cp -R context-discipline ~/.claude/skills/`
+1. Copy both skills: `mkdir -p ~/.claude/skills && cp -R context-discipline brain ~/.claude/skills/`
 2. Merge this into `~/.claude/settings.json`, next to any hooks you already have:
 
    ```json
@@ -176,6 +182,51 @@ echo '{"cwd": "'"$HOME"'/code/my-project/src", "source": "startup"}' \
 It should print your STATUS file and end with `(Project brain loaded from ...)`. In a new Claude Code session in
 that project, ask "what does STATUS say?" to check. Tests for the other two hooks are in
 `context-discipline/references/hooks.md`.
+
+## Several brains
+
+A session normally uses the brain of the folder it starts in. When one folder holds several projects, or you move
+between projects in one window, register the brains by name and pick one:
+
+```text
+/brain                          list the brains: folder, STATUS size and date; * marks the one this window uses
+/brain paper                    use brain "paper" in this window from now on (prints its STATUS)
+/brain none                     use no brain in this window
+/brain add paper [folder]       register the brain of a folder (default: the current one)
+/brain new thesis ~/thesis      set up a brain there with init-brain.sh, then register it
+/brain rename paper paper1      registry only
+/brain remove paper1            registry only; the project's files stay
+```
+
+Which brain a session uses, first match wins:
+
+1. **The choice made with `/brain` in this window.** It holds until you change it, across `/clear` and compactions:
+   it is keyed to the Claude Code process (`$CLAUDE_PID`), not to the session id, which `/clear` replaces. A new
+   window, or `claude --resume` in a new process, starts without one.
+2. **`CD_BRAIN=<name>` (or `none`) at launch**, for example `CD_BRAIN=paper claude`.
+3. **The folder walk-up**, as before.
+
+All three hooks follow the same choice: the STATUS that is loaded, the project whose `.claude/compactions/` gets the
+summaries, and whether the context note fires. `CD_HOOKS=off` still turns them all off.
+
+Names are 1 to 32 of `a-z`, `0-9` and `-`. The registry is `~/.claude/brains.json` (in `$CLAUDE_CONFIG_DIR` if set):
+
+```json
+{"version": 1, "brains": {"paper": {"root": "/home/me/code/paper", "status": "/home/me/code/paper/STATUS.md"}}}
+```
+
+A registered STATUS gets the same checks as a pointer's (a text file inside its project folder, which may not be your
+home folder or `/`) and the same 9,000-character limit. If a chosen brain cannot be loaded (renamed, removed, moved),
+the session starts with one warning line instead of a STATUS. A window's choice is a two-line file in
+`~/.claude/brain-sessions/`: the name, and when its Claude Code process started, so a later process that gets the
+same PID does not inherit it. Choices older than 7 days are pruned when a new one is written, unless their window
+still runs.
+
+`/brain` is a user-invoked skill (Claude does not load it on its own). Its script runs before Claude sees anything,
+through Claude Code's `` !`command` `` skill injection, pre-approved in the skill's `allowed-tools`; Claude only relays
+the result. With `disableSkillShellExecution` set, `/brain` cannot run: use `CD_BRAIN`, or run
+`bash ~/.claude/skills/context-discipline/scripts/brain.sh help` in a terminal (picking a brain for a window still
+has to happen inside Claude Code).
 
 ## Day-to-day use
 
@@ -271,9 +322,10 @@ missing hooks are added (an install from before the compaction hooks gets the tw
 `./install.sh --uninstall` (add `--dry-run` first to see what it will do) removes the skill folder; every hook whose
 command contains `context-discipline/scripts/` followed by `brain-hook.sh`, `compact-log.sh` or `ctx-nudge.sh` (and
 any entry or list left empty); and the CLAUDE.md line, backing up both files first. A locally edited skill copy is
-moved to `skill-backups/` instead of deleted. Projects keep their `.claude/brain`, STATUS, overview,
-`.claude/compactions/` and the `.gitignore` line. The context note's state files (a few bytes per session) stay in
-`${TMPDIR:-/tmp}/context-discipline/` until the system clears its temp folder.
+moved to `skill-backups/` instead of deleted; the `/brain` skill is removed the same way. The registry of named
+brains (`brains.json`) and the windows' choices (`brain-sessions/`) stay. Projects keep their `.claude/brain`,
+STATUS, overview, `.claude/compactions/` and the `.gitignore` line. The context note's state files (a few bytes per
+session) stay in `${TMPDIR:-/tmp}/context-discipline/` until the system clears its temp folder.
 
 To turn the hooks off for some runs only, without uninstalling, set `CD_HOOKS=off` in their environment (for
 example `CD_HOOKS=off claude -p ...`): all three hooks then do nothing. The hooks fire in headless `claude -p`, SDK and
@@ -304,7 +356,8 @@ prompts replace this skill's briefs; this skill adds the hand-back contract and 
 
 **Do the hooks write files or use the network?** None uses the network. `brain-hook.sh` only reads. `compact-log.sh`
 writes one owner-only file per compaction to `.claude/compactions/`, in brain projects only. `ctx-nudge.sh` keeps one
-small state file per session in `${TMPDIR:-/tmp}/context-discipline/`. All three always exit 0. `brain-hook.sh`
+small state file per session in `${TMPDIR:-/tmp}/context-discipline/`. All three always exit 0. `/brain` writes only
+the registry and its choice files in `~/.claude`. `brain-hook.sh`
 takes about 30 ms; `ctx-nudge.sh` about 60 ms on a 60 MB transcript and about 12 ms outside brain projects.
 
 **Is a cloned repo's STATUS trusted?** It gets the same trust as the repo's own CLAUDE.md: a repo that ships a
@@ -336,7 +389,8 @@ the last one stopped. To compare against the skill switched off, set `CD_HOOKS=o
 ## Tests
 
 `bash tests/run-all.sh` runs every `tests/test-*.sh`: the three hooks (`test-hook.sh`, `test-compact-log.sh`,
-`test-ctx-nudge.sh`), `init-brain.sh` (`test-init-brain.sh`), `ctx-audit.py` on synthetic transcripts
+`test-ctx-nudge.sh`), named brains as the hooks pick them (`test-brains.sh`) and the `/brain` script
+(`test-brain-cmd.sh`), `init-brain.sh` (`test-init-brain.sh`), `ctx-audit.py` on synthetic transcripts
 (`test-ctx-audit.sh`, fixtures in `tests/fixtures/`), the installer (`test-install.sh`), and end-to-end checks
 (`test-scripts.sh`). All run against throwaway home folders, never your real `~/.claude`.
 
@@ -347,7 +401,8 @@ context-discipline/            the skill (what install.sh copies)
   SKILL.md
   references/                  agent briefs, brain templates, hook guide
   scripts/                     brain-hook.sh, compact-log.sh, ctx-nudge.sh, brain-lib.sh (shared),
-                               init-brain.sh, ctx-audit.py
+                               init-brain.sh, brain.sh (/brain), ctx-audit.py
+brain/SKILL.md                 the /brain command (what install.sh copies to skills/brain/)
 install.sh                     installer (--dry-run, --uninstall, --skip-claude-md)
 tests/                         run-all.sh, test-*.sh, fixtures/
 evals/                         evals.json, files/, grade_eval1.py, RESULTS.md, README.md
