@@ -38,18 +38,19 @@ from a measurement.)
 
 - **The skill** (`context-discipline/SKILL.md`): where each kind of information lives, the delegation contract,
   design → spec → plan with subagents, cheap reviews, and how to handle compaction.
+- **Brains** for sessions: a brain is a name plus a folder holding `STATUS.md` (current state),
+  `00-Project-Overview.md` (big picture and dated decision log), `decisions/` and `handoffs/`. It belongs to a
+  Claude Code session, not to a folder: you attach one to a window with `/brain` (a small user-invoked skill running
+  `scripts/brain.sh`), and several windows may share one. See [Brains](#brains).
 - **Three hooks**, active only when the session has a brain:
-  - `SessionStart` (`brain-hook.sh`) prints the project's STATUS file on startup, resume, `/clear`, compaction and
-    fork, so the current state is back in context automatically.
-  - `PostCompact` (`compact-log.sh`) saves each compaction summary to `.claude/compactions/` in the project, so you
-    can check what a compaction kept.
+  - `SessionStart` (`brain-hook.sh`) prints the brain's STATUS file on startup, resume, `/clear`, compaction and
+    fork, so the current state is back in context automatically. A session with no brain gets a one-line hint
+    instead.
+  - `PostCompact` (`compact-log.sh`) saves each compaction summary to `~/.claude/brain-logs/<name>/`, so you can
+    check what a compaction kept.
   - `UserPromptSubmit` (`ctx-nudge.sh`) adds a short note for Claude when the context reaches 40% of its window, and
-    every 15% after: at the next natural break, update STATUS and suggest `/clear` or `/compact <focus>`.
-- **A project brain** (`scripts/init-brain.sh`): `STATUS.md` (current state), `00-Project-Overview.md` (big picture
-  and dated decision log), the `.claude/brain` pointer the hooks follow, and a `.gitignore` line for the
-  compaction logs.
-- **Named brains** (`/brain`, a small user-invoked skill running `scripts/brain.sh`): register brains by name and
-  pick one per Claude Code window, for folders that hold several projects. See [Several brains](#several-brains).
+    every 15% after: at the next natural break, update STATUS and suggest `/clear` or `/compact <focus>`. It also
+    says once when another session changed STATUS.
 - **Agent brief templates** (`references/agent-briefs.md`): research, context gathering, spec and plan drafting,
   implementation, review and fact-checking, each with a short hand-back contract.
 - **ctx-audit** (`scripts/ctx-audit.py`): measures a past session's context from API usage (peaks, compactions,
@@ -64,19 +65,16 @@ Claude Code session: startup / resume / /clear / compaction / fork
 SessionStart hook (global, in ~/.claude/settings.json) runs brain-hook.sh
         |
         v
-brain-hook.sh walks up from the session's folder:
-   ~/code/app/src/ui  ->  ~/code/app/src  ->  ~/code/app      (stops before $HOME)
-        |
-        v
-finds ~/code/app/.claude/brain, whose first line says: STATUS.md
-        |
-        v
-prints ~/code/app/STATUS.md and "(Project brain loaded from ...)"  ->  Claude reads it
+which brain did this window attach?  /brain paper (kept per Claude Code process), else CD_BRAIN=paper
+        |                                                  |
+        v                                                  v
+brains.json: paper -> ~/.claude/brains/paper/          none: one line, "No brain attached. Brains: paper,
+prints its STATUS.md and "(Project brain loaded ...)"        thesis. Type /brain <name> to attach one."
 ```
 
-The other two hooks find the project the same way. The pointer must name a text file inside the project by a
-relative path; anything else is refused with a one-line warning. A brain picked by name (`/brain <name>` in the
-window, or `CD_BRAIN=<name>` at launch) takes the place of the walk-up for all three hooks; see Several brains.
+The folder the session runs in plays no part: two windows in one repo can work on different brains, and one brain
+can follow you across repos. The other two hooks use the same brain. A registered STATUS must be a text file inside
+the brain's folder; anything else is refused with a one-line warning.
 
 The delegation contract, which the skill applies to every subagent:
 
@@ -124,7 +122,10 @@ It works in `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`, and changes four thin
    atomically, and first backed up to `settings.json.bak-<timestamp>`. If it is not valid JSON, the installer stops
    and changes nothing. It warns if `"disableAllHooks": true` is set.
 4. **One line in `~/.claude/CLAUDE.md`** (backed up first; skipped if a line already mentions
-   `context-discipline`, or with `--skip-claude-md`). The line is shown under Manual install.
+   `context-discipline`, or with `--skip-claude-md`; the line an earlier version appended is replaced). The line is
+   shown under Manual install.
+
+It also converts a `brains.json` registry of version 1 (an earlier version's) to version 2, after a backup.
 
 Run `./install.sh --dry-run` to see every planned change without making any. Running the installer again is safe:
 steps already done are skipped.
@@ -153,50 +154,50 @@ steps already done are skipped.
 3. Add this line to `~/.claude/CLAUDE.md`:
 
    ```text
-   - For any work that spans many steps or sessions (projects, research surveys, designs, specs, plans, subagent dispatches, reviews), follow the `context-discipline` skill: the main agent coordinates; subagents put deliverables in files and hand back about 15 lines; keep the project brain (STATUS.md, auto-loaded through a `.claude/brain` pointer) current at every decision.
+   - For any work that spans many steps or sessions (projects, research surveys, designs, specs, plans, subagent dispatches, reviews), follow the `context-discipline` skill: the main agent coordinates; subagents put deliverables in files and hand back about 15 lines; keep the session's brain (STATUS.md, attached with `/brain` and loaded at every session start) current at every decision.
    ```
 
 4. Open `/hooks` to check the three hooks are listed.
 
-## Set up a project
+## Start a brain
 
-In each project that will outlive one session:
+In a Claude Code session whose work will outlive it:
 
-```bash
-bash "$HOME/.claude/skills/context-discipline/scripts/init-brain.sh" ~/code/my-project   # optional 2nd arg: docs/STATUS.md
+```text
+/brain new thesis                     a brain in ~/.claude/brains/thesis/, attached to this window
+/brain new app --at ~/code/app/brain  or in a folder of your choice, say inside the repo (to commit it)
 ```
 
-This creates `STATUS.md`, `00-Project-Overview.md` beside it and `.claude/brain`, adds `.claude/compactions/` to the
-project's `.gitignore`, and never overwrites an existing file. It refuses `$HOME` and `/` as the project, refuses
-STATUS paths that are absolute, start with `~` or climb out with `..`, and exits 1 if anything was not created.
-Fill both files in (or let Claude do it), keep STATUS under 9,000 characters (`wc -m STATUS.md`), and commit them
-with the pointer. Or just ask Claude: "set up a project brain for this repo".
+This writes `STATUS.md` and `00-Project-Overview.md` from the templates (never overwriting a file), registers the
+brain and attaches it to the window; nothing is written in the folder the session runs in. Fill both files in (or let
+Claude do it) and keep STATUS under 9,000 characters (`wc -m STATUS.md`). Or just ask Claude: "start a brain for
+this project". Claude can run the same command (`bash ~/.claude/skills/context-discipline/scripts/brain.sh new
+<name>`); attaching an existing brain is yours to do with `/brain <name>`.
 
 ## Verify
 
 ```bash
-echo '{"cwd": "'"$HOME"'/code/my-project/src", "source": "startup"}' \
-  | bash "$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh"
+echo '{"source": "startup"}' | CD_BRAIN=thesis bash "$HOME/.claude/skills/context-discipline/scripts/brain-hook.sh"
 ```
 
-It should print your STATUS file and end with `(Project brain loaded from ...)`. In a new Claude Code session in
-that project, ask "what does STATUS say?" to check. Tests for the other two hooks are in
-`context-discipline/references/hooks.md`.
+It should print your STATUS file and end with `(Project brain loaded from ...)`. Without `CD_BRAIN` it prints the
+one-line no-brain hint. In a new Claude Code session, `/brain thesis`, then ask "what does STATUS say?". Tests for
+the other two hooks are in `context-discipline/references/hooks.md`.
 
-## Several brains
+## Brains
 
-A session normally uses the brain of the folder it starts in. When one folder holds several projects, or you move
-between projects in one window, register the brains by name and pick one:
+A brain belongs to a Claude Code session, not to a folder. Its folder is only where its files live.
 
 ```text
-/brain                          list the brains: folder, STATUS size and date; * marks the one this window uses
-/brain paper                    use brain "paper" in this window from now on (prints its STATUS)
-/brain none                     use no brain in this window
-/brain auto                     drop this window's choice: back to CD_BRAIN, else the folder's brain
-/brain add paper [folder]       register the brain of a folder (default: the current one), or update its entry
-/brain new thesis ~/thesis      set up a brain there with init-brain.sh, then register it
-/brain rename paper paper1      registry only
-/brain remove paper1            registry only; the project's files stay
+/brain                          list the brains: folder, STATUS size and date, how many windows use each;
+                                * marks the one this window uses
+/brain paper                    attach brain "paper" to this window from now on (prints its STATUS)
+/brain none                     detach: this window uses no brain
+/brain new thesis [--at <dir>]  create a brain (default folder ~/.claude/brains/thesis) and attach it
+/brain add paper <dir|file>     register an existing brain: <dir>/STATUS.md, or that STATUS file
+/brain add paper                register the brain an old .claude/brain pointer in the current folder names
+/brain rename paper paper1      rename it (registry, the windows' choices and its compaction logs)
+/brain remove paper1            unregister it; its files stay
 ```
 
 Arguments are split like shell words, but nothing in them is expanded or run: quote a path with spaces
@@ -204,43 +205,56 @@ Arguments are split like shell words, but nothing in them is expanded or run: qu
 
 Which brain a session uses, first match wins:
 
-1. **The choice made with `/brain` in this window.** It holds until you change it (`/brain auto` drops it), across
-   `/clear` and compactions: it is keyed to the Claude Code process (`$CLAUDE_PID`), not to the session id, which
-   `/clear` replaces. A new window, or `claude --resume` in a new process, starts without one. Subagents of the
-   window share it.
+1. **The choice made with `/brain` in this window.** It holds until you change it, across `/clear` and compactions:
+   it is keyed to the Claude Code process (`$CLAUDE_PID`), not to the session id, which `/clear` replaces. A new
+   window, or `claude --resume` in a new process, starts without one. Subagents of the window share it.
 2. **`CD_BRAIN=<name>` (or `none`) at launch**, for example `CD_BRAIN=paper claude`.
-3. **The folder walk-up**, as before.
+3. **None.** The session starts with one line: `No brain attached. Brains: paper, thesis. Type /brain <name> to
+   attach one.` If a window started in the same folder attached a brain with `/brain` before, the line suggests it
+   (`Last used here: paper (type /brain paper)`); it never attaches one by itself.
 
-All three hooks follow the same choice: the STATUS that is loaded, the project whose `.claude/compactions/` gets the
-summaries, and whether the context note fires. `CD_HOOKS=off` still turns them all off.
+All three hooks follow the same choice: the STATUS that is loaded, where compaction summaries go, and whether the
+notes fire. `CD_HOOKS=off` still turns them all off.
+
+**Several windows on one brain.** Any number of windows may attach the same brain. `/brain` shows how many live
+windows use each, and attaching a brain that another window uses says so ("Also attached in 1 other window; STATUS
+may change under you"). When another session changes STATUS, the next prompt in this window carries one note to
+re-read it; Claude re-reads STATUS right before editing it and changes only the sections it owns. Handoff and
+decisions files carry the time in their names (`2026-10-12-1430-<topic>.md`), so two sessions never write the same
+file.
 
 Names are 1 to 32 of `a-z`, `0-9` and `-`. The registry is `~/.claude/brains.json` (in `$CLAUDE_CONFIG_DIR` if set):
 
 ```json
-{"version": 1, "brains": {"paper": {"root": "/home/me/code/paper", "status": "/home/me/code/paper/STATUS.md"}}}
+{"version": 2, "brains": {"paper": {"dir": "/home/me/.claude/brains/paper", "status": "STATUS.md"}}}
 ```
 
-A registered brain loads the STATUS that its project's own `.claude/brain` names, so a project that moves its STATUS
-(say from `phase-a/` to `phase-b/`) needs no re-registering; the registry's `status` is the fallback for a project
-whose pointer is missing or refused. `/brain` notes when the two differ, and `/brain add <name>` updates the entry,
-also after the project folder itself moved. Either way the STATUS gets the same checks as a pointer's (a text file
-inside its project folder, which may not be your home folder or `/`) and the same 9,000-character limit. If a chosen
-brain cannot be loaded (removed, folder gone), the session starts with one warning line that says how to fix it,
-instead of a STATUS. A window's choice is a two-line file in `~/.claude/brain-sessions/`: the name, and when its
-Claude Code process started, so a later process that gets the same PID does not inherit it. Choices older than 7
-days are pruned when a new one is written, unless their window still runs.
+`status` is relative to `dir`. The STATUS must be a text file inside `dir` (after resolving symlinks), and `dir`
+may not be your home folder or `/`; the same 9,000-character limit applies. If a chosen brain cannot be loaded
+(removed, folder gone), the session starts with one warning line that says how to fix it, instead of a STATUS;
+`/brain add <name> <dir>` points a moved brain's entry at its new folder. A window's choice is a two-line file in
+`~/.claude/brain-sessions/`: the name, and when its Claude Code process started, so a later process that gets the
+same PID does not inherit it. Choices older than 7 days are pruned when a new one is written, unless their window
+still runs. The same folder keeps, per window, which STATUS it was last shown (`seen-*`) and, per folder, which
+brain was last attached there (`last-used`).
+
+**Upgrading from folder pointers.** Earlier versions loaded the brain named by a `.claude/brain` pointer above the
+session's folder. Nothing reads those pointers now. Start Claude Code in such a folder and run `/brain add <name>`:
+it registers the STATUS the pointer names (reading only the pointer's first 4,096 bytes) and tells you the pointer
+can be deleted. Brains you had registered by name keep working: the installer converts the registry. Compaction
+summaries now go to `~/.claude/brain-logs/<name>/`; old `.claude/compactions/` folders are left as they are.
 
 `/brain` is a user-invoked skill (Claude does not load it on its own). Its script runs before Claude sees anything,
 through Claude Code's `!` command injection, pre-approved in the skill's `allowed-tools`; your arguments reach it as
 one quoted value, and Claude only relays the result. With `disableSkillShellExecution` set, `/brain` cannot run: use
-`CD_BRAIN`, or run `bash ~/.claude/skills/context-discipline/scripts/brain.sh help` in a terminal (picking a brain
-for a window still has to happen inside Claude Code).
+`CD_BRAIN`, or run `bash ~/.claude/skills/context-discipline/scripts/brain.sh help` in a terminal (attaching a brain
+to a window still has to happen inside Claude Code).
 
 **With Claude Code's Bash sandbox on**, the script runs inside the sandbox (seen with 2.1.296; an `excludedCommands`
 entry for it did not take it out). Its `ps` call is blocked there, so a choice is saved without its start time and
 the PID-reuse guard is off; the choice still works. The sandbox lets commands write only to the working folder, temp
-and folders you allow, and protects most of `~/.claude`; writing `brains.json` and `brain-sessions/` there was not
-tested. If `/brain` says `cannot write` or `cannot create`, add `"sandbox": {"filesystem": {"allowWrite":
+and folders you allow, and protects most of `~/.claude`; writing `brains.json`, `brains/` and `brain-sessions/` there
+was not tested. If `/brain` says `cannot write` or `cannot create`, add `"sandbox": {"filesystem": {"allowWrite":
 ["~/.claude"]}}` to your settings (the sandbox keeps its protected files there protected; use your
 `$CLAUDE_CONFIG_DIR` if set), or pick brains with `CD_BRAIN=<name>` at launch.
 
@@ -250,11 +264,11 @@ You mostly work as before; Claude changes how it works:
 
 | You say | What Claude does differently |
 |---|---|
-| "Let's start a project to build X." | Sets up the project brain and tells you, in two or three lines, what lives where. |
+| "Let's start a project to build X." | Starts a brain for the session (or asks you to attach one) and tells you, in two or three lines, what lives where. |
 | "Survey what's been published on X." | Sends one research subagent that writes the survey to a file and replies in about 15 lines; reads only that reply and the sections it needs. |
 | "Write the spec from our decisions." | Has a subagent draft it from the decisions file, spot-checks it with `grep`, and gives you the path to review. |
 | "Review this branch." | A reviewer writes the full review to a file; Claude reads only the lines it flags and sends fixes back by path. |
-| Design questions | Asks one question per message, with a recommendation, and records each answer in a dated decisions file. |
+| Design questions | Asks one question per message, with a recommendation, and records each answer in a decisions file named with date and time. |
 | (context passes 40%, 55%, ...) | Finishes the current step, updates STATUS at the next natural break, and suggests `/clear` or `/compact <focus>`. |
 | (after a compaction, or the next morning) | STATUS is already back in context; Claude continues from its next steps instead of asking you to recap. |
 
@@ -272,7 +286,8 @@ The skill makes compaction safer, not safe. What helps:
 - At a task boundary, `/clear` and start from STATUS and the handoff note. Claude Code's docs recommend clearing
   between tasks, and `/clear` costs nothing.
 - `/autocompact <tokens>` or the `autoCompactWindow` setting moves the point where auto-compaction fires.
-- Read `.claude/compactions/` to see what a compaction kept; the full history stays in the session transcript.
+- Read `~/.claude/brain-logs/<name>/` to see what a compaction kept; the full history stays in the session
+  transcript.
 
 ## Checking context use
 
@@ -331,17 +346,18 @@ categories; the skill maps each to a fix. Previews that look like credentials ar
 
 `git pull && ./install.sh` in your clone. The installed copy is refreshed (the old one goes to `skill-backups/`),
 missing hooks are added (an install from before the compaction hooks gets the two new ones, and its four
-`SessionStart` entries become one), and the CLAUDE.md step is a no-op.
+`SessionStart` entries become one), the CLAUDE.md line of an earlier version is replaced, and a version 1 registry is
+converted. Folder pointers need one `/brain add <name>` each (see Brains).
 
 ## Uninstalling
 
 `./install.sh --uninstall` (add `--dry-run` first to see what it will do) removes the skill folder; every hook whose
 command contains `context-discipline/scripts/` followed by `brain-hook.sh`, `compact-log.sh` or `ctx-nudge.sh` (and
 any entry or list left empty); and the CLAUDE.md line, backing up both files first. A locally edited skill copy is
-moved to `skill-backups/` instead of deleted; the `/brain` skill is removed the same way. The registry of named
-brains (`brains.json`) and the windows' choices (`brain-sessions/`) stay. Projects keep their `.claude/brain`,
-STATUS, overview, `.claude/compactions/` and the `.gitignore` line. The context note's state files (a few bytes per
-session) stay in `${TMPDIR:-/tmp}/context-discipline/` until the system clears its temp folder.
+moved to `skill-backups/` instead of deleted; the `/brain` skill is removed the same way. Brains keep their folders,
+and the registry (`brains.json`), the windows' choices (`brain-sessions/`) and the compaction logs (`brain-logs/`)
+stay in `~/.claude`. The context note's state files (a few bytes per session) stay in
+`${TMPDIR:-/tmp}/context-discipline/` until the system clears its temp folder.
 
 To turn the hooks off for some runs only, without uninstalling, set `CD_HOOKS=off` in their environment (for
 example `CD_HOOKS=off claude -p ...`): all three hooks then do nothing. The hooks fire in headless `claude -p`, SDK and
@@ -351,10 +367,9 @@ baseline arm.
 ## FAQ and troubleshooting
 
 **The hook does not seem to fire.** Check `/hooks`; restart Claude Code only if the hook is missing. Then run the
-Verify command. If it prints `(Project brain not loaded: ...)`, the pointer was refused and the line says why. If it
-prints nothing, check that `<project>/.claude/brain` exists and its first non-comment line names an existing file by
-a relative path. The walk stops before `$HOME` and `/`, so the project folder can be anywhere except your home
-folder itself (or `/`): a pointer there is never used.
+Verify command. If it prints `(Project brain not loaded: ...)`, the brain was refused and the line says why. If it
+prints `No brain attached`, the window has none: `/brain <name>`. A `.claude/brain` pointer in a folder is not read
+any more: `/brain add <name>` from that folder registers its brain.
 
 **STATUS got cut off.** Claude Code replaces hook output over 10,000 characters with a file path and a
 2,000-character preview. So the hook prints at most the first 9,000 characters of STATUS, followed by a line asking
@@ -368,19 +383,18 @@ output files by date and topic, which never trips the check.
 prompts replace this skill's briefs; this skill adds the hand-back contract and the output paths.
 
 **STATUS appears twice.** A project-level hook (for example a `cat STATUS.md` in the project's
-`.claude/settings.json`) also prints it. Remove that one; the global hook covers every project with a pointer.
+`.claude/settings.json`) also prints it. Remove that one; the global hook covers every session with a brain.
 
-**Do the hooks write files or use the network?** None uses the network. `brain-hook.sh` only reads. `compact-log.sh`
-writes one owner-only file per compaction to `.claude/compactions/`, in brain projects only. `ctx-nudge.sh` keeps one
-small state file per session in `${TMPDIR:-/tmp}/context-discipline/`. All three always exit 0. `/brain` writes the
-registry and its choice files in `~/.claude`; `/brain new` also runs `init-brain.sh`, which creates the brain's files
-in the project. `brain-hook.sh`
-takes about 30 ms; `ctx-nudge.sh` about 60 ms on a 60 MB transcript and about 12 ms outside brain projects.
+**Do the hooks write files or use the network?** None uses the network. `brain-hook.sh` writes one small record per
+window (which STATUS it showed) in `~/.claude/brain-sessions/`. `compact-log.sh` writes one owner-only file per
+compaction to `~/.claude/brain-logs/<name>/`, only when the session has a brain. `ctx-nudge.sh` keeps one small state
+file per session in `${TMPDIR:-/tmp}/context-discipline/` and updates the window's record. All three always exit 0.
+`/brain` writes the registry and its choice files in `~/.claude`; `/brain new` also runs `init-brain.sh`, which
+creates the brain's two files in its folder. `brain-hook.sh` takes about 30 to 80 ms; `ctx-nudge.sh` about 60 ms on a
+60 MB transcript and about 12 ms without a brain.
 
-**Is a cloned repo's STATUS trusted?** It gets the same trust as the repo's own CLAUDE.md: a repo that ships a
-`.claude/brain` puts its STATUS file in your context when you start Claude Code inside it. Likewise, a pointer in a
-parent folder (say `~/Downloads/.claude/brain`) can inject any text file inside that folder. The hook never follows a
-pointer out of its folder through an absolute path, `..` or a symlink.
+**Can a cloned repo inject a STATUS?** No longer: the hooks load only brains you registered and attached. A brain
+folder you register from someone else's repo gets the same trust as that repo's CLAUDE.md.
 
 ## Evals
 
@@ -406,7 +420,7 @@ the last one stopped. To compare against the skill switched off, set `CD_HOOKS=o
 ## Tests
 
 `bash tests/run-all.sh` runs every `tests/test-*.sh`: the three hooks (`test-hook.sh`, `test-compact-log.sh`,
-`test-ctx-nudge.sh`), named brains as the hooks pick them (`test-brains.sh`) and the `/brain` script
+`test-ctx-nudge.sh`), brains as the hooks pick them (`test-brains.sh`) and the `/brain` script
 (`test-brain-cmd.sh`), `init-brain.sh` (`test-init-brain.sh`), `ctx-audit.py` on synthetic transcripts
 (`test-ctx-audit.sh`, fixtures in `tests/fixtures/`), the installer (`test-install.sh`), and end-to-end checks
 (`test-scripts.sh`). All run against throwaway home folders, never your real `~/.claude`.
