@@ -73,6 +73,13 @@ check "the no-brain hint names the registered brains and how to attach one" \
   eval '[ "$out" = "No brain attached. Brains: a, b. Type /brain <name> to attach one." ]'
 hook "$HM/a" CD_BRAIN=
 check "CD_BRAIN set but empty: same as unset" nobrain "$out"
+check "session in a folder holding an old .claude/brain pointer: the hint says so and how to register it" \
+  eval '[ "$out" = "No brain attached. This folder has an old brain pointer; /brain add <name> registers it." ]'
+mkdir -p "$HM/fifo/.claude"; mkfifo "$HM/fifo/.claude/brain"
+hook "$HM/fifo"; rc=$?
+check "the pointer is only tested for, never opened (a FIFO there: no hang, the same line)" \
+  eval '[ $rc = 0 ] && has "$out" "This folder has an old brain pointer"'
+rm -f "$HM/fifo/.claude/brain"
 for src in clear resume fork; do
   out=$(printf '{"session_id": "s", "source": "%s"}' "$src" | env HOME="$HM" bash "$H" 2>&1)
   check "no brain, source $src: the hint" nobrain "$out"
@@ -109,7 +116,7 @@ check "the closing line, one line: for the work's current state this STATUS over
 hook "$HM/plain/x" CD_BRAIN=b
 check "CD_BRAIN=b in a folder with no brain: loads b" has "$out" status-of-b
 hook "$HM/a/src" CD_BRAIN=none
-check "CD_BRAIN=none: no brain, only the hint" nobrain "$out"
+check "CD_BRAIN=none (the user chose no brain): prints nothing, not even the hint" [ -z "$out" ]
 hook "$HM/a" CD_BRAIN=zzz
 check "CD_BRAIN names an unregistered brain: one warning line naming it and the registry, nothing loaded" \
   eval 'refused "$out" "brain \"zzz\" (chosen with CD_BRAIN)" && has "$out" "$REG"'
@@ -137,7 +144,7 @@ hook "$HM/a" CLAUDE_PID=12x
 check "CLAUDE_PID that is not a number: ignored" nobrain "$out"
 choose "pid-$$" none
 hook "$HM/a" CLAUDE_PID=$$ CD_BRAIN=b
-check "/brain none: no brain even with CD_BRAIN set, only the hint" nobrain "$out"
+check "/brain none: no brain even with CD_BRAIN set, and no hint" [ -z "$out" ]
 choose "pid-$$" 'Not A Name'
 hook "$HM/a" CLAUDE_PID=$$
 check "a choice file that holds no valid name: ignored" nobrain "$out"
@@ -160,7 +167,7 @@ check "two windows attached to brain b: the hook loads it in both" \
 choose "pid-$$" none
 hook "$HM/plain" CLAUDE_PID=$$; out1="$out"; hook "$HM/plain" CLAUDE_PID=$PPID
 check "one of them detaches (/brain none): the other still loads b" \
-  eval 'nobrain "$out1" && has "$out" status-of-b'
+  eval '[ -z "$out1" ] && has "$out" status-of-b'
 rm -f "$CFG/brain-sessions/pid-$PPID"
 
 # Without CLAUDE_PID (older Claude Code), the key is the session id.
@@ -253,7 +260,7 @@ hook "$HM/a" CD_BRAIN=b2
 check "CLAUDE_CONFIG_DIR unset: ~/.claude/brains.json is read, which lacks b2" refused "$out" 'brain "b2"'
 printf 'none\n\n' > "$CD2/brain-sessions/pid-$$"
 hook "$HM/a" CLAUDE_PID=$$ CLAUDE_CONFIG_DIR="$CD2"
-check "CLAUDE_CONFIG_DIR set: the window's choice is read there too" eval 'nobrain "$out" && has "$out" b2'
+check "CLAUDE_CONFIG_DIR set: the window's choice (none) is read there too" [ -z "$out" ]
 
 # Without python3 the registry cannot be read: a named brain is refused with a reason; no brain gives the hint.
 NOPY="$T/bin-without-python"; mkdir -p "$NOPY"
@@ -313,7 +320,10 @@ hook "$HM/proj"
 check "the suggested brain no longer exists: no suggestion" eval '[ "$out" = "No brain attached. Brains: b. Type /brain <name> to attach one." ]'
 registry "$REG" a "$HM/a" STATUS.md b "$HM/b/notes" STATUS.md
 hook "$HM/proj" CD_BRAIN=none
-check "CD_BRAIN=none: still only a hint, with the suggestion" has "$out" "Last used here: a"
+check "CD_BRAIN=none: no hint at all" [ -z "$out" ]
+mkdir -p "$HM/proj/.claude"; echo STATUS.md > "$HM/proj/.claude/brain"; hook "$HM/proj"
+check "an old pointer in a folder with a last-used brain: the last-used suggestion wins" has "$out" "Last used here: a"
+rm -rf "$HM/proj/.claude"
 out=$(printf '{"session_id": "s", "source": "startup"}' | env HOME="$HM" CLAUDE_PROJECT_DIR="$HM/proj" bash "$H" 2>&1)
 check "no cwd in the input: \$CLAUDE_PROJECT_DIR is the session's folder" has "$out" "Last used here: a"
 rm -f "$LU"; mkfifo "$LU"

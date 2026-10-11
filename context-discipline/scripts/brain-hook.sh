@@ -10,9 +10,10 @@
 # The registered STATUS is printed only if, with every symlink resolved, it is a regular text file inside its
 # brain folder (named by a path relative to it; the folder may not be $HOME or "/").
 #
-# Contract: with no brain, prints one line saying so and naming the registered brains, and the one last attached
-# with /brain from this session's folder if it still exists (a hint: it never attaches it); nothing on a
-# compaction, where the start already said it. When a chosen brain is refused, prints one warning line naming it (no file
+# Contract: with no brain, prints one line saying so: the brain last attached with /brain from this session's
+# folder if it still exists, else that the folder has an old .claude/brain pointer (only tested for, never read),
+# else the registered brains. A hint: it never attaches one. Nothing on a compaction (the start already said it),
+# and nothing when the user chose no brain (/brain none, CD_BRAIN=none). When a chosen brain is refused, prints one warning line naming it (no file
 # content). Prints nothing at all when CD_HOOKS=off or the input is not a JSON object. Always exits 0, never touches
 # the network. Its one write: after printing a STATUS, it records for this window what it showed (path, mtime and
 # size) in <config>/brain-sessions/seen-<window key>, so the UserPromptSubmit hook (ctx-nudge.sh) can say when
@@ -24,33 +25,50 @@ CAP=10000    # Claude Code replaces hook output over 10,000 characters with a 2,
 here="${BASH_SOURCE[0]%/*}"; [ "$here" = "${BASH_SOURCE[0]}" ] && here=.
 . "$here/brain-lib.sh" 2>/dev/null || exit 0
 
-# last_used <input>: the brain last attached (with /brain) by a window whose session ran in this session's folder
-# (the input's cwd, else $CLAUDE_PROJECT_DIR, else $PWD), from <config>/brain-sessions/last-used; "" if none.
-last_used() {
-  local cwd lu="$(cd_config_dir)/brain-sessions/last-used"
-  [ -f "$lu" ] || return 0
+# session_folder <input>: this session's folder, symlinks resolved (the input's cwd, else $CLAUDE_PROJECT_DIR, else
+# $PWD); fails if it cannot be resolved.
+session_folder() {
+  local cwd
   cwd=$(cd_json_get "$1" cwd 2>/dev/null) || cwd=""
   [ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
-  cwd=$(cd -P -- "$cwd" 2>/dev/null && pwd -P) || return 0
-  head -c 262144 -- "$lu" 2>/dev/null | D="$cwd" awk -F '\t' 'NF == 2 && $1 == ENVIRON["D"] { n = $2 } END { print n }'
+  cd -P -- "$cwd" 2>/dev/null && pwd -P
+}
+
+# last_used <folder>: the brain last attached (with /brain) by a window whose session ran in <folder>, from
+# <config>/brain-sessions/last-used; "" if none.
+last_used() {
+  local lu="$(cd_config_dir)/brain-sessions/last-used"
+  [ -f "$lu" ] || return 0
+  head -c 262144 -- "$lu" 2>/dev/null | D="$1" awk -F '\t' 'NF == 2 && $1 == ENVIRON["D"] { n = $2 } END { print n }'
 }
 
 # no_brain <input>: the one-line hint for a session with no brain (not after a compaction: the start said it). It
 # names the brains, and the one last used from this folder if it still exists; it never attaches one.
 no_brain() {
-  local names n=0 shown="" more="" last
+  local names n=0 shown="" more="" last="" dir home ok=1
   [ "$(cd_json_get "$1" source 2>/dev/null)" = compact ] && return
-  if ! names=$(cd_brain_names); then
-    echo "No brain attached. Type /brain to list the brains, /brain <name> to attach one."; return
+  names=$(cd_brain_names) || ok=0
+  dir=$(session_folder "$1") || dir=""
+  if [ "$ok" = 1 ] && [ -n "$names" ]; then
+    while IFS= read -r name; do
+      n=$((n + 1)); [ "$n" -le 10 ] && shown="${shown:+$shown, }$name"
+    done <<<"$names"
+    [ "$n" -gt 10 ] && more=" and $((n - 10)) more"
+    [ -n "$dir" ] && last=$(last_used "$dir")
+    if [ -n "$last" ] && printf '%s\n' "$names" | grep -qxF -- "$last"; then
+      printf 'No brain attached. Last used here: %s (type /brain %s). All brains: %s%s.\n' "$last" "$last" "$shown" "$more"
+      return
+    fi
   fi
-  [ -n "$names" ] || { echo "No brains yet. /brain new <name> creates one."; return; }
-  while IFS= read -r name; do
-    n=$((n + 1)); [ "$n" -le 10 ] && shown="${shown:+$shown, }$name"
-  done <<<"$names"
-  [ "$n" -gt 10 ] && more=" and $((n - 10)) more"
-  last=$(last_used "$1")
-  if [ -n "$last" ] && printf '%s\n' "$names" | grep -qxF -- "$last"; then
-    printf 'No brain attached. Last used here: %s (type /brain %s). All brains: %s%s.\n' "$last" "$last" "$shown" "$more"
+  # An old pointer here (earlier versions loaded it): only tested for, never opened, and not in $HOME (~/.claude).
+  home=$(cd -P -- "${HOME:-/}" 2>/dev/null && pwd -P) || home=""
+  if [ -n "$dir" ] && [ "$dir" != "$home" ] && { [ -e "$dir/.claude/brain" ] || [ -L "$dir/.claude/brain" ]; }; then
+    echo "No brain attached. This folder has an old brain pointer; /brain add <name> registers it."; return
+  fi
+  if [ "$ok" = 0 ]; then
+    echo "No brain attached. Type /brain to list the brains, /brain <name> to attach one."
+  elif [ -z "$names" ]; then
+    echo "No brains yet. /brain new <name> creates one."
   else
     printf 'No brain attached. Brains: %s%s. Type /brain <name> to attach one.\n' "$shown" "$more"
   fi
@@ -81,7 +99,7 @@ cd_select_brain "$input"   # from here on LC_ALL=C: count and match bytes
 case $? in
   0) ;;
   1) printf '(Project brain not loaded: %s %s.)\n' "$CD_SUBJECT" "$CD_REFUSED"; exit 0 ;;
-  2) no_brain "$input"; exit 0 ;;
+  2) [ "$CD_NAME" = none ] || no_brain "$input"; exit 0 ;;   # no hint when the user chose no brain
   *) exit 0 ;;   # CD_HOOKS=off, or input that is not a JSON object
 esac
 status="$CD_STATUS"; size="$CD_SIZE"

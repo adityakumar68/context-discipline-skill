@@ -493,6 +493,11 @@ new() {
     0) say_err "the name \"$name\" is already used for ${out%%$'\n'*}; pick another name."; return ;;
     *) say_err "$REG ${out:-cannot be read}; fix it or move it aside, then run /brain again."; return ;;
   esac
+  if [ -e "$PWD/.claude/brain" ] || [ -L "$PWD/.claude/brain" ]; then
+    say_err "this folder has an old .claude/brain pointer ($PWD/.claude/brain), so its brain likely exists already;" \
+      "register it with: /brain add $name. To start a new brain anyway, delete the pointer or run /brain new elsewhere."
+    return
+  fi
   if [ -n "$2" ]; then
     folder=$(expand_tilde "$2")
   else

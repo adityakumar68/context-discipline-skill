@@ -192,8 +192,7 @@ check "list after /brain beta: beta marked, chosen with /brain" \
   eval 'hasline "$out" "^\* beta " && has "$out" "This window uses brain \"beta\" (chosen with /brain)"'
 bc "$HM/a" none
 check "/brain none: says so, exit 0" eval '[ $rc = 0 ] && has "$out" "This window now uses no project brain"'
-check "/brain none: the hooks print only the no-brain hint, even in a folder with a pointer" \
-  eval 'o=$(hookout "$HM/a"); ! has "$o" status-of && has "$o" "No brain attached"'
+check "/brain none: the hooks print nothing, not even the hint (the user chose no brain)" eval '[ -z "$(hookout "$HM/a")" ]'
 bc "$HM/a"
 check "list after /brain none: says no brain, chosen with /brain none" has "$out" "This window uses no brain (chosen with /brain none)"
 # The recorded start time must not depend on the locale or time zone of whoever writes or reads it.
@@ -353,6 +352,11 @@ check "CLAUDE_CONFIG_DIR: the registry is written there" \
   eval '[ -f "$CD2/brains.json" ] && [ ! -e "$REG" ] && grep -q echo "$CD2/brains.json"'
 
 # --- new: create a brain, register it, attach it to this window -----------------------------------------------------
+bc "$HM/a" new zz
+check "new in a folder with an old .claude/brain pointer: refused, says to /brain add it, nothing made" \
+  eval 'has "$out" "brain: " && has "$out" "/brain add zz" && has "$out" "$HM/a/.claude/brain" && [ ! -e "$CFG/brains/zz" ] && ! reg "\"zz\" in b"'
+bc "$HM/a" new zz --at "$HM/zzdir"
+check "new --at in such a folder: refused too" eval 'has "$out" "/brain add zz" && [ ! -e "$HM/zzdir" ]'
 bc "$HM/plain" new fresh
 check "new fresh: STATUS and overview in <config>/brains/fresh, registered there, exit 0" \
   eval '[ $rc = 0 ] && [ -f "$CFG/brains/fresh/STATUS.md" ] && [ -f "$CFG/brains/fresh/00-Project-Overview.md" ] && reg "b[\"fresh\"] == {\"dir\": \"$CFG/brains/fresh\", \"status\": \"STATUS.md\"}"'

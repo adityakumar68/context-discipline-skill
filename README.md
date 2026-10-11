@@ -211,7 +211,9 @@ Which brain a session uses, first match wins:
 2. **`CD_BRAIN=<name>` (or `none`) at launch**, for example `CD_BRAIN=paper claude`.
 3. **None.** The session starts with one line: `No brain attached. Brains: paper, thesis. Type /brain <name> to
    attach one.` If a window started in the same folder attached a brain with `/brain` before, the line suggests it
-   (`Last used here: paper (type /brain paper)`); it never attaches one by itself.
+   (`Last used here: paper (type /brain paper)`); if the folder still has an old `.claude/brain` pointer, it says
+   `/brain add <name>` registers it. It never attaches one by itself, and it says nothing when you chose no brain
+   (`/brain none`, `CD_BRAIN=none`).
 
 All three hooks follow the same choice: the STATUS that is loaded, where compaction summaries go, and whether the
 notes fire. `CD_HOOKS=off` still turns them all off.

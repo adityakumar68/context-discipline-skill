@@ -38,11 +38,13 @@ every symlink resolved, it is a regular text file inside `dir`, which may not be
   current state it overrides older notes in memory; rules in CLAUDE.md still apply. Working rules: ...)` (or
   `chosen with CD_BRAIN`). It then records, for this window, which STATUS it showed and its mtime and size
   (`<config>/brain-sessions/seen-<window key>`), for the UserPromptSubmit hook.
-- No brain (except on `compact`): one line, `No brain attached. Brains: a, b. Type /brain <name> to attach one.`
-  When a window whose session ran in this same folder last attached a brain that still exists:
-  `No brain attached. Last used here: a (type /brain a). All brains: a, b.` (a hint: it never attaches it; `/brain`
-  keeps one line per folder in `<config>/brain-sessions/last-used`). With no brains registered:
-  `No brains yet. /brain new <name> creates one.`
+- No brain (except on `compact`, and except when the user chose none with `/brain none` or `CD_BRAIN=none`): one
+  line, `No brain attached. Brains: a, b. Type /brain <name> to attach one.` When a window whose session ran in this
+  same folder last attached a brain that still exists: `No brain attached. Last used here: a (type /brain a). All
+  brains: a, b.` (a hint: it never attaches it; `/brain` keeps one line per folder in
+  `<config>/brain-sessions/last-used`). Else, when the session's folder holds an old `.claude/brain` (only tested for,
+  never opened): `No brain attached. This folder has an old brain pointer; /brain add <name> registers it.` With no
+  brains registered: `No brains yet. /brain new <name> creates one.`
 - A chosen brain that cannot be loaded prints one line, `(Project brain not loaded: brain "<name>" (chosen with
   /brain) <reason>.)`, and no file content: the name is not registered (renamed or removed?), its folder is gone,
   or its STATUS is refused (missing, outside its folder, not text).
