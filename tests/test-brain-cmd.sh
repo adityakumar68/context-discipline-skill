@@ -67,14 +67,14 @@ before_a=$(tree "$HM/a")
 bc "$HM/a/src" add alpha
 check "add alpha in a subfolder of a brain project: registered, exit 0" \
   eval '[ $rc = 0 ] && has "$out" "Registered brain \"alpha\"" && has "$out" "/brain alpha"'
-check "registry: version 1, alpha -> absolute root and STATUS path" \
-  reg "d['version'] == 1 and b['alpha'] == {'root': '$HM/a', 'status': '$HM/a/STATUS.md'}"
+check "registry: version 2, alpha -> its folder and its STATUS file's name" \
+  reg "d['version'] == 2 and b['alpha'] == {'dir': '$HM/a', 'status': 'STATUS.md'}"
 check "add left the project's files untouched" [ "$(tree "$HM/a")" = "$before_a" ]
 bc "$HM/plain" add beta "$HM/b"
-check "add beta <folder>: registers that folder's brain (STATUS from its pointer)" \
-  reg "b['beta'] == {'root': '$HM/b', 'status': '$HM/b/notes/STATUS.md'}"
+check "add beta <folder>: registers that folder's brain (dir: the folder of the STATUS its pointer names)" \
+  reg "b['beta'] == {'dir': '$HM/b/notes', 'status': 'STATUS.md'}"
 bc "$HM" add gamma c/sub
-check "add with a relative folder: resolved from the current folder" reg "b['gamma']['root'] == '$HM/c'"
+check "add with a relative folder: resolved from the current folder" reg "b['gamma']['dir'] == '$HM/c'"
 cp "$REG" "$T/reg.before"
 bc "$HM/a" add alpha
 check "add the same brain under the same name again: says so, registry unchanged" \
@@ -101,8 +101,8 @@ check "add without a name: usage, exit 0" eval '[ $rc = 0 ] && has "$out" "usage
 
 # --- list --------------------------------------------------------------------------------------------------------------
 bc "$HM/plain/x"
-check "list: one row per brain with root, STATUS path, size and date" \
-  eval 'hasline "$out" "^  alpha +$HM/a +STATUS.md, 21 bytes, changed $TODAY\$" && hasline "$out" "^  beta +$HM/b +notes/STATUS.md, 21 bytes, changed $TODAY\$"'
+check "list: one row per brain with its folder, STATUS file, size and date" \
+  eval 'hasline "$out" "^  alpha +$HM/a +STATUS.md, 21 bytes, changed $TODAY\$" && hasline "$out" "^  beta +$HM/b/notes +STATUS.md, 21 bytes, changed $TODAY\$"'
 check "list in a plain folder: this window uses no brain, nothing marked" \
   eval 'has "$out" "This window uses no brain" && ! hasline "$out" "^\* "'
 bc "$HM/a/src"
@@ -116,11 +116,11 @@ bc "$HM/plain" CD_BRAIN=beta
 check "list with CD_BRAIN=beta: beta marked, says it was chosen with CD_BRAIN" \
   eval 'hasline "$out" "^\* beta " && has "$out" "This window uses brain \"beta\" (chosen with CD_BRAIN)"'
 python3 -I -c 'import json, sys
-d = json.load(open(sys.argv[1])); d["brains"]["gone"] = {"root": sys.argv[2], "status": sys.argv[2] + "/STATUS.md"}
+d = json.load(open(sys.argv[1])); d["brains"]["gone"] = {"dir": sys.argv[2], "status": "STATUS.md"}
 json.dump(d, open(sys.argv[1], "w"))' "$REG" "$HM/gone"
 bc "$HM/plain"
 check "list: a brain the hooks would refuse is shown with the reason" \
-  hasline "$out" "^  gone +$HM/gone +not usable: names a missing project folder"
+  hasline "$out" "^  gone +$HM/gone +not usable: names a missing folder"
 cp "$REG" "$T/reg.good"; printf '{"version": 1, "brains": ' > "$REG"
 bc "$HM/plain"
 check "list with a broken registry: says so, exit 0" eval '[ $rc = 0 ] && has "$out" "$REG" && has "$out" "not valid JSON"'
@@ -158,7 +158,7 @@ check "/brain <unregistered name>: refused, lists the names, choice unchanged" \
   eval '[ $rc = 0 ] && has "$out" "brain: " && has "$out" "alpha" && cmp -s "$SES/pid-$$" "$T/choice.before"'
 bc "$HM/a" gone
 check "/brain <brain the hooks refuse>: refused with the reason, choice unchanged" \
-  eval 'has "$out" "names a missing project folder" && cmp -s "$SES/pid-$$" "$T/choice.before"'
+  eval 'has "$out" "names a missing folder" && cmp -s "$SES/pid-$$" "$T/choice.before"'
 bc "$HM/a" Bad_Name
 check "/brain <not a name>: refused" eval 'has "$out" "brain: " && cmp -s "$SES/pid-$$" "$T/choice.before"'
 bc "$HM/a" alpha extra
@@ -206,7 +206,7 @@ bc "$HM/a" beta
 before_b=$(tree "$HM/b")
 bc "$HM/plain" rename beta bravo
 check "rename beta bravo: registry entry renamed, same paths" \
-  eval '[ $rc = 0 ] && reg "\"beta\" not in b and b[\"bravo\"][\"root\"] == \"$HM/b\""'
+  eval '[ $rc = 0 ] && reg "\"beta\" not in b and b[\"bravo\"][\"dir\"] == \"$HM/b/notes\""'
 check "rename: this window's choice of beta now reads bravo" eval '[ "$(head -n 1 "$SES/pid-$$")" = bravo ]'
 check "rename: the hooks still load the brain in this window" eval 'has "$(hookout "$HM/a")" "(brain \"bravo\", chosen with /brain)"'
 check "rename: project files untouched" [ "$(tree "$HM/b")" = "$before_b" ]
@@ -249,7 +249,7 @@ check "CLAUDE_CONFIG_DIR: the registry is written there" \
 mkdir -p "$HM/fresh"
 bc "$HM/plain" new fresh "$HM/fresh"
 check "new fresh <folder>: init-brain ran (STATUS, overview, pointer) and the brain is registered" \
-  eval '[ $rc = 0 ] && [ -f "$HM/fresh/STATUS.md" ] && [ -f "$HM/fresh/00-Project-Overview.md" ] && [ -f "$HM/fresh/.claude/brain" ] && reg "b[\"fresh\"][\"status\"] == \"$HM/fresh/STATUS.md\""'
+  eval '[ $rc = 0 ] && [ -f "$HM/fresh/STATUS.md" ] && [ -f "$HM/fresh/00-Project-Overview.md" ] && [ -f "$HM/fresh/.claude/brain" ] && reg "b[\"fresh\"] == {\"dir\": \"$HM/fresh\", \"status\": \"STATUS.md\"}"'
 check "new: shows init-brain's summary and the registration" eval 'has "$out" "Project brain for $HM/fresh" && has "$out" "Registered brain \"fresh\""'
 mkdir -p "$HM/fresh2"
 bc "$HM/plain" new fresh "$HM/fresh2"
@@ -262,33 +262,24 @@ check "new in the home folder: init-brain refuses, nothing registered" eval '! r
 bc "$HM/plain" new fresh3
 check "new without a folder: usage" eval '[ $rc = 0 ] && has "$out" "usage" && has "$out" "new <name> <folder>"'
 
-# --- a registered brain follows its project's pointer; add updates its entry -----------------------------------------
-mkdir -p "$HM/mv/.claude" "$HM/mv/phase-a" "$HM/mv/phase-b"
-printf 'status-of-mv-old\n' > "$HM/mv/phase-a/STATUS.md"; printf 'status-of-mv-new\n' > "$HM/mv/phase-b/STATUS.md"
-echo phase-a/STATUS.md > "$HM/mv/.claude/brain"
+# --- an entry is its folder: add updates it for the same folder or a folder that is gone ---------------------------
+mkdir -p "$HM/mv/.claude"; printf 'status-of-mv\n' > "$HM/mv/STATUS.md"; echo STATUS.md > "$HM/mv/.claude/brain"
 bc "$HM/mv" add mv
-echo phase-b/STATUS.md > "$HM/mv/.claude/brain"     # the project moves its STATUS on
-bc "$HM/plain"
-check "list: a brain whose pointer moved on shows the pointer's STATUS, and a note naming the registered one" \
-  eval 'hasline "$out" "^  mv +$HM/mv +phase-b/STATUS.md, " && has "$out" "$HM/mv/phase-a/STATUS.md" && has "$out" "/brain add mv"'
 bc "$HM/plain" mv
-check "/brain mv: prints the pointer's STATUS, with the same note" \
-  eval 'has "$out" status-of-mv-new && ! has "$out" status-of-mv-old && has "$out" "/brain add mv"'
+printf 'status-of-mv-next\n' > "$HM/mv/NEXT.md"; echo NEXT.md > "$HM/mv/.claude/brain"
 bc "$HM/mv" add mv
-check "add mv again in its own project: updates the entry's STATUS instead of refusing" \
-  eval '[ $rc = 0 ] && has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"root\": \"$HM/mv\", \"status\": \"$HM/mv/phase-b/STATUS.md\"}"'
-bc "$HM/plain"
-check "list after the update: no note" eval 'hasline "$out" "^[* ] mv +$HM/mv +phase-b/STATUS.md, " && ! has "$out" "phase-a"'
-# A project folder that moved: the messages say how to fix it, and add points the entry at the new place.
+check "add mv again for the same folder, another STATUS file: updates the entry's STATUS instead of refusing" \
+  eval '[ $rc = 0 ] && has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"dir\": \"$HM/mv\", \"status\": \"NEXT.md\"}"'
+# A brain folder that moved: the messages say how to fix it, and add points the entry at the new place.
 mv "$HM/mv" "$HM/mv2"
 bc "$HM/plain"
-check "list: a brain whose project folder is gone says how to fix it" \
-  eval 'has "$out" "names a missing project folder" && has "$out" "/brain add mv <folder>"'
+check "list: a brain whose folder is gone says how to fix it" \
+  eval 'has "$out" "names a missing folder" && has "$out" "/brain add mv <folder>"'
 check "hook in a window that chose it: the warning says how to fix it too" \
   eval 'has "$(hookout "$HM/plain")" "/brain add mv <folder>"'
 bc "$HM/plain" add mv "$HM/mv2"
 check "add mv <new folder> when its old folder is gone: the entry moves there" \
-  eval 'has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"root\": \"$HM/mv2\", \"status\": \"$HM/mv2/phase-b/STATUS.md\"}"'
+  eval 'has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"dir\": \"$HM/mv2\", \"status\": \"NEXT.md\"}"'
 mkdir -p "$HM/mv3/.claude"; printf 's\n' > "$HM/mv3/STATUS.md"; echo STATUS.md > "$HM/mv3/.claude/brain"
 cp "$REG" "$T/reg.before"
 bc "$HM/plain" add mv "$HM/mv3"
@@ -302,11 +293,11 @@ bca() { out=$(cd "$1" && printf '%s\n' "$2" | env HOME="$HM" CLAUDE_PID=$$ perl 
 mkdir -p "$HM/My Proj/.claude"; printf 'status-of-space\n' > "$HM/My Proj/STATUS.md"; echo STATUS.md > "$HM/My Proj/.claude/brain"
 bca "$HM/plain" "add sp '~/My Proj'"
 check "--args: a quoted ~/path with a space is one argument, ~ expanded" \
-  eval '[ $rc = 0 ] && has "$out" "Registered brain \"sp\"" && reg "b[\"sp\"][\"root\"] == \"$HM/My Proj\""'
+  eval '[ $rc = 0 ] && has "$out" "Registered brain \"sp\"" && reg "b[\"sp\"][\"dir\"] == \"$HM/My Proj\""'
 bca "$HM/plain" 'add sp2 ~/My\ Proj'
-check "--args: a backslash-escaped space works too" reg "b['sp2']['root'] == '$HM/My Proj'"
+check "--args: a backslash-escaped space works too" reg "b['sp2']['dir'] == '$HM/My Proj'"
 bca "$HM/plain" "add sp3 \"$HM/My Proj\""
-check "--args: a double-quoted absolute path" reg "b['sp3']['root'] == '$HM/My Proj'"
+check "--args: a double-quoted absolute path" reg "b['sp3']['dir'] == '$HM/My Proj'"
 cp "$REG" "$T/reg.before"
 bca "$HM/a" 'add tick `touch '"$T"'/pwned1`'
 check "--args: a backtick is plain text: no command runs, the current folder is not registered" \
@@ -325,7 +316,25 @@ check "--args: surrounding spaces ignored" has "$out" "usage: /brain"
 bca "$HM/plain" "$(printf 'x%.0s' $(seq 1 5000))"
 check "--args over 4,096 bytes: refused" eval 'has "$out" "brain: " && has "$out" "too long"'
 bc "$HM/plain" add sp4 '~/My Proj'
-check "argv form: a folder starting with ~/ is expanded too" reg "b['sp4']['root'] == '$HM/My Proj'"
+check "argv form: a folder starting with ~/ is expanded too" reg "b['sp4']['dir'] == '$HM/My Proj'"
+
+# --- a version 1 registry: read as version 2, written as version 2 at the next change -----------------------------
+cp "$REG" "$T/reg.keep"
+python3 -I -c 'import json, sys
+json.dump({"version": 1, "note": "kept", "brains": {"old": {"root": sys.argv[2], "status": sys.argv[2] + "/STATUS.md"},
+           "half": {"root": "/x"}}}, open(sys.argv[1], "w"))' "$REG" "$HM/c"
+cp "$REG" "$T/reg.v1"
+bc "$HM/plain"
+check "list on a version 1 registry: an entry shows its STATUS file's folder as its folder" \
+  hasline "$out" "^  old +$HM/c +STATUS.md, "
+check "list never rewrites the registry" cmp -s "$REG" "$T/reg.v1"
+bc "$HM/plain" old
+check "/brain <name> on a version 1 registry: attaches it" has "$out" 'This window now uses brain "old"'
+check "attaching never rewrites the registry" cmp -s "$REG" "$T/reg.v1"
+bc "$HM/d" add v1new
+check "add on a version 1 registry: written as version 2, entries converted, unknown keys and unusable entries kept" \
+  reg "d['version'] == 2 and d['note'] == 'kept' and b['old'] == {'dir': '$HM/c', 'status': 'STATUS.md'} and b['half'] == {'root': '/x'} and 'v1new' in b"
+cp "$T/reg.keep" "$REG"; bc "$HM/plain" none
 
 # --- messages and edge cases -------------------------------------------------------------------------------------
 cp "$REG" "$T/reg.keep"
@@ -355,8 +364,8 @@ out=$(cd "$HM/plain" && env PATH="$NOPY" HOME="$T/empty-home" CLAUDE_PID=$$ "$NO
 check "list without python3 and no registry: no python3 line" eval '! has "$out" "python3" && has "$out" "This window uses"'
 python3 -I -c 'import json, sys
 d = json.load(open(sys.argv[1]))
-d["brains"].update({"half": {"root": "/x"}, "Bad Name": {"root": "/y", "status": "/y/S.md"}, "nums": 5,
-                    "tabbed": {"root": "/a\tb", "status": "/a\tb/S.md"}})
+d["brains"].update({"half": {"dir": "/x"}, "Bad Name": {"dir": "/y", "status": "S.md"}, "nums": 5,
+                    "tabbed": {"dir": "/a\tb", "status": "S.md"}})
 json.dump(d, open(sys.argv[1], "w"))' "$REG"
 bc "$HM/plain"
 check "list shows entries it cannot use, flagged (no entry hidden)" \

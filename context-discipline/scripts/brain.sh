@@ -50,9 +50,10 @@ Starting Claude Code with CD_BRAIN=<name> (or none) picks a brain for that windo
 EOF
 }
 
-# The registry's write commands, added to the lib's reader (CD_REGISTRY_PY). Exit codes: 0 done, 3 no such name,
-# 4 registry unusable (message printed), 5 already registered the same way, 6 name in use (its root printed),
-# 7 entry updated (prints what changed: "status<TAB>old", "root<TAB>old" or "entry<TAB>").
+# The registry's write commands, added to the lib's reader (CD_REGISTRY_PY). Each write saves version 2 (a version 1
+# file is converted as it is read). Exit codes: 0 done, 3 no such name, 4 registry unusable (message printed),
+# 5 already registered the same way, 6 name in use (its folder printed), 7 entry updated (prints what changed:
+# "status<TAB>old", "dir<TAB>old" or "entry<TAB>").
 IFS= read -r -d '' BRAIN_PY <<'PY' || true
 import tempfile
 
@@ -96,26 +97,30 @@ def save(path, reg):
         sys.exit(4)
 
 
-def cmd_set(path, name, root, status):
-    """Register <name>. An existing entry is updated if it is for the same project folder, if its folder no longer
-    exists (the project moved), or if it is unusable; any other existing entry is left alone (6)."""
+def cmd_set(path, name, folder, status):
+    """Register <name>. An existing entry is updated if it is for the same folder, if its folder no longer exists
+    (the brain moved), or if it is unusable; any other existing entry is left alone (6)."""
     reg = load(path)
     old = reg["brains"].get(name)
-    if old == {"root": root, "status": status}:
+    if old == {"dir": folder, "status": status}:
+        if WAS_V1[0]:
+            save(path, reg)   # unchanged, but now saved as version 2
         return 5
     change = None
     if name in reg["brains"]:
         e = entry(reg["brains"], name)
         if e is None:
             change = "entry\t"
-        elif os.path.isdir(e[0]) and os.path.realpath(e[0]) == os.path.realpath(root):
+        elif e == (folder, status):
+            pass
+        elif os.path.isdir(e[0]) and os.path.realpath(e[0]) == os.path.realpath(folder):
             change = "status\t" + e[1]
         elif not os.path.isdir(e[0]):
-            change = "root\t" + e[0]
+            change = "dir\t" + e[0]
         else:
             print(e[0])
             return 6
-    reg["brains"][name] = {"root": root, "status": status}
+    reg["brains"][name] = {"dir": folder, "status": status}
     save(path, reg)
     if change:
         print(change)
@@ -129,7 +134,7 @@ def cmd_rename(path, old, new):
         return 3
     if new in reg["brains"]:
         e = reg["brains"][new]
-        print(e.get("root") if isinstance(e, dict) and isinstance(e.get("root"), str) else "another entry")
+        print(e.get("dir") if isinstance(e, dict) and isinstance(e.get("dir"), str) else "another entry")
         return 6
     reg["brains"] = {(new if k == old else k): v for k, v in reg["brains"].items()}
     save(path, reg)
@@ -142,7 +147,7 @@ def cmd_remove(path, name):
         return 3
     e = reg["brains"].pop(name)
     save(path, reg)
-    print(e.get("root", "") if isinstance(e, dict) and isinstance(e.get("root"), str) else "")
+    print(e.get("dir", "") if isinstance(e, dict) and isinstance(e.get("dir"), str) else "")
     return 0
 
 
@@ -285,7 +290,7 @@ pick() {
       say_err "brain \"$name\" $CD_REFUSED.${known:+ Registered: $known.} Nothing changed."; return
     fi
     LC_ALL=C; export LC_ALL
-    if ! cd_check_named "$CD_REG_ROOT" "$CD_REG_STATUS" "$name"; then
+    if ! cd_check_brain "$CD_REG_DIR" "$CD_REG_STATUS" "$name"; then
       say_err "brain \"$name\" ${CD_REFUSED:-cannot be read}, so the hooks would not load it. Nothing changed."; return
     fi
   fi
@@ -298,24 +303,23 @@ pick() {
   printf 'This window now uses brain "%s" (%s). The hooks load it at every start, /clear and compaction in this\n' \
     "$name" "$CD_STATUS"
   printf 'window. It replaces any project STATUS loaded earlier in this session; here it is:\n\n'
-  [ -n "${CD_NOTE:-}" ] && printf 'Note: brain "%s": %s.\n\n' "$name" "$CD_NOTE"
   if [ "${CD_HOOKS:-}" = off ]; then
     echo "(CD_HOOKS=off is set in this window, so the hooks are off and will not load it.)"
   fi
   printf '{}' | CD_HOOKS= bash "$here/brain-hook.sh"
 }
 
-# register <name> <root> <status>
+# register <name> <dir> <status>
 register() {
   local out rc=0
-  case "$2$3" in *[[:cntrl:]]*) say_err "the project path contains control characters; not registered."; return ;; esac
+  case "$2$3" in *[[:cntrl:]]*) say_err "the path contains control characters; not registered."; return ;; esac
   out=$(regpy set "$REG" "$1" "$2" "$3") || rc=$?
   case $rc in
     0) printf 'Registered brain "%s": %s (STATUS: %s).\nUse it in this window: /brain %s\n' "$1" "$2" "$3" "$1" ;;
     5) printf 'Brain "%s" is already registered for %s. Use it in this window: /brain %s\n' "$1" "$2" "$1" ;;
     7) case "$out" in
          status$'\t'*) printf 'Updated brain "%s": its STATUS is now %s (was %s).\n' "$1" "$3" "${out#*$'\t'}" ;;
-         root$'\t'*) printf 'Updated brain "%s": its project folder is now %s (was %s, which no longer exists).\n' \
+         dir$'\t'*) printf 'Updated brain "%s": its folder is now %s (was %s, which no longer exists).\n' \
                         "$1" "$2" "${out#*$'\t'}" ;;
          *) printf 'Updated brain "%s": it now points to %s, in place of an entry /brain could not use.\n' "$1" "$2" ;;
        esac ;;
@@ -342,7 +346,7 @@ add() {
     1) say_err "$CD_POINTER $CD_REFUSED, so the hooks would not load it; not registered."; return ;;
     *) say_err "cannot read the project at $CD_ROOT; not registered."; return ;;
   esac
-  register "$name" "$CD_ROOT" "$CD_STATUS"
+  register "$name" "${CD_STATUS%/*}" "${CD_STATUS##*/}"
 }
 
 new() {
@@ -409,7 +413,7 @@ remove() {
   out=$(regpy remove "$REG" "$name") || rc=$?
   case $rc in
     0) printf 'Removed brain "%s" from the registry. Its files stay in %s; to register it again: /brain add %s %s\n' \
-         "$name" "${out:-its project folder}" "$name" "${out:-<folder>}"
+         "$name" "${out:-its folder}" "$name" "${out:-<folder>}"
        echo "Windows that chose it load no brain (with a warning) until they pick another." ;;
     3) say_err "no brain named \"$name\" in $REG. See /brain." ;;
     *) say_err "${out:-cannot write $REG}" ;;
@@ -441,12 +445,12 @@ list() {
     echo "Named brains (registry: $REG):"
     while IFS=$'\037' read -r name root status problem; do [ ${#name} -gt $width ] && width=${#name}; done <<<"$rows"
     while IFS=$'\037' read -r name root status problem; do
-      mark=" "; CD_NOTE=""
+      mark=" "
       if [ -n "$problem" ]; then
         info="not usable: $problem"
-      elif cd_check_named "$root" "$status" "$name"; then
+      elif cd_check_brain "$root" "$status" "$name"; then
         info="$CD_REL, $(commas "$CD_SIZE") bytes, changed $(date -r "$CD_STATUS" +%Y-%m-%d 2>/dev/null)"
-        roots="$roots"$'\n'"$CD_ROOT"
+        roots="$roots"$'\n'"$CD_STATUS"
         if [ "$sel" = 0 ] && { [ "$s_name" = "$name" ] || { [ "$s_how" = folder ] && [ "$s_status" = "$CD_STATUS" ]; }; }; then
           mark="*"
         fi
@@ -454,7 +458,6 @@ list() {
         info="not usable: ${CD_REFUSED:-cannot be read}"
       fi
       printf '%s %-*s  %s  %s\n' "$mark" "$width" "$name" "$(cd_printable "$root" 4096)" "$info"
-      [ -n "${CD_NOTE:-}" ] && printf '  %-*s  note: %s\n' "$width" "" "$(cd_printable "$CD_NOTE" 8192)"
     done <<<"$rows"
   fi
 
@@ -464,7 +467,7 @@ list() {
     if cd_check_pointer; then
       here_root="$CD_ROOT"; here_rel="$CD_REL"
       case "$roots"$'\n' in
-        *$'\n'"$here_root"$'\n'*) ;;
+        *$'\n'"$CD_STATUS"$'\n'*) ;;
         *) echo "Folder brain here, not registered: $here_root ($(cd_printable "$here_rel" 4096)). Register it: /brain add <name>" ;;
       esac
     else

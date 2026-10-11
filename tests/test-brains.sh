@@ -5,7 +5,9 @@
 #      pid-$CLAUDE_PID, else sid-<session id>);
 #   2. CD_BRAIN=<name> or CD_BRAIN=none in the environment;
 #   3. the folder walk-up to .claude/brain (the default, unchanged).
-# Named brains come from the registry <config>/brains.json, <config> being $CLAUDE_CONFIG_DIR or ~/.claude.
+# Named brains come from the registry <config>/brains.json, <config> being $CLAUDE_CONFIG_DIR or ~/.claude:
+#   {"version": 2, "brains": {"<name>": {"dir": "<abs brain folder>", "status": "<STATUS, relative to dir>"}}}
+# A version 1 registry ({"root": ..., "status": "<abs STATUS>"}) is still read: dir = the STATUS file's folder.
 # Usage: bash tests/test-brains.sh
 # Self-contained: works in a mktemp folder with HOME pointed into it, so nothing outside it is read or written.
 
@@ -31,8 +33,17 @@ mkdir -p "$CFG" "$HM/a/.claude" "$HM/a/src" "$HM/b/.claude" "$HM/b/notes" "$HM/p
 printf '# STATUS\nstatus-of-a\n' > "$HM/a/STATUS.md"; echo STATUS.md > "$HM/a/.claude/brain"
 printf '# STATUS\nstatus-of-b\n' > "$HM/b/notes/STATUS.md"; echo notes/STATUS.md > "$HM/b/.claude/brain"
 
-# registry <file> [<name> <root> <status>]...: write a version 1 registry.
+# registry <file> [<name> <dir> <status>]...: write a version 2 registry.
 registry() {
+  python3 -I - "$@" <<'PY'
+import json, sys
+f, r = sys.argv[1], sys.argv[2:]
+json.dump({"version": 2, "brains": {r[i]: {"dir": r[i + 1], "status": r[i + 2]} for i in range(0, len(r), 3)}},
+          open(f, "w"))
+PY
+}
+# registry1 <file> [<name> <root> <status>]...: write a version 1 registry (root and an absolute STATUS path).
+registry1() {
   python3 -I - "$@" <<'PY'
 import json, sys
 f, r = sys.argv[1], sys.argv[2:]
@@ -40,7 +51,7 @@ json.dump({"version": 1, "brains": {r[i]: {"root": r[i + 1], "status": r[i + 2]}
           open(f, "w"))
 PY
 }
-registry "$REG" a "$HM/a" "$HM/a/STATUS.md" b "$HM/b" "$HM/b/notes/STATUS.md"
+registry "$REG" a "$HM/a" STATUS.md b "$HM/b/notes" STATUS.md
 
 # choose <key> <name> [start]: what /brain <name> leaves for a window: <config>/brain-sessions/<key>.
 choose() { mkdir -p "$CFG/brain-sessions"; printf '%s\n%s\n' "$2" "${3-}" > "$CFG/brain-sessions/$1"; }
@@ -128,42 +139,44 @@ unchoose
 # --- what a registered brain may name -----------------------------------------------------------------------------
 mkdir -p "$HM/c/.claude" "$HM/bin/.claude"; printf 'status-of-c\n' > "$HM/c/STATUS.md"
 printf 'A\000B status-of-bin\n' > "$HM/bin/STATUS.md"
-registry "$REG" gone "$HM/gone" "$HM/gone/STATUS.md" nofile "$HM/c" "$HM/c/MISSING.md" \
-  outside "$HM/c" "$HM/b/notes/STATUS.md" home "$HM" "$HM/c/STATUS.md" rel "$HM/c" STATUS.md \
-  relroot c "$HM/c/STATUS.md" binary "$HM/bin" "$HM/bin/STATUS.md" folder "$HM/c" "$HM/c/.claude" \
-  c "$HM/c" "$HM/c/STATUS.md"
+registry "$REG" gone "$HM/gone" STATUS.md nofile "$HM/c" MISSING.md outside "$HM/c" ../b/notes/STATUS.md \
+  home "$HM" c/STATUS.md abs "$HM/c" "$HM/c/STATUS.md" tilde "$HM/c" '~/c/STATUS.md' reldir c STATUS.md \
+  binary "$HM/bin" STATUS.md folder "$HM/c" .claude c "$HM/c" STATUS.md
 hook "$HM/plain" CD_BRAIN=c
-check "registered brain with a STATUS inside its root: loaded" has "$out" status-of-c
-for n in gone nofile outside home rel relroot binary folder; do
+check "registered brain with a STATUS inside its folder: loaded" has "$out" status-of-c
+for n in gone nofile outside home abs tilde reldir binary folder; do
   hook "$HM/plain" CD_BRAIN=$n
   check "registered brain '$n' that the hooks must not load: one warning line, exit 0" \
     eval 'refused "$out" "brain \"$n\""'
 done
-ln -s "$HM/b/notes/STATUS.md" "$HM/c/link.md"; registry "$REG" link "$HM/c" "$HM/c/link.md"
+ln -s "$HM/b/notes/STATUS.md" "$HM/c/link.md"; registry "$REG" link "$HM/c" link.md
 hook "$HM/plain" CD_BRAIN=link
-check "registered STATUS that is a symlink leaving its root: refused" refused "$out" 'brain "link"'
+check "registered STATUS that is a symlink leaving its folder: refused" refused "$out" 'brain "link"'
 
 python3 -I -c 'import sys; open(sys.argv[1], "w").write("z" * 12000)' "$HM/c/STATUS.md"
-registry "$REG" c "$HM/c" "$HM/c/STATUS.md"; hook "$HM/plain" CD_BRAIN=c
+registry "$REG" c "$HM/c" STATUS.md; hook "$HM/plain" CD_BRAIN=c
 check "registered brain with a 12,000-char STATUS: cut to 9,000 with the usual notice" \
   has "$out" "[STATUS.md is 12,000 characters, over the 9,000 limit, so only the first 9,000 are shown here."
 
-# --- a registered brain follows its project's own pointer; the registered STATUS is the fallback ------------------
-mkdir -p "$HM/mv/.claude" "$HM/mv/phase-a" "$HM/mv/phase-b"
-printf 'status-of-mv-old\n' > "$HM/mv/phase-a/STATUS.md"; printf 'status-of-mv-new\n' > "$HM/mv/phase-b/STATUS.md"
-echo phase-b/STATUS.md > "$HM/mv/.claude/brain"
-registry "$REG" mv "$HM/mv" "$HM/mv/phase-a/STATUS.md"
-hook "$HM/plain" CD_BRAIN=mv
-check "pointer moved on since registering: the hook loads the pointer's STATUS, not the registered one" \
-  eval 'has "$out" status-of-mv-new && ! has "$out" status-of-mv-old && has "$out" "loaded from $HM/mv/phase-b/STATUS.md (brain \"mv\""'
-echo missing.md > "$HM/mv/.claude/brain"; hook "$HM/plain" CD_BRAIN=mv
-check "pointer naming a missing file: the registered STATUS is the fallback" has "$out" status-of-mv-old
-echo "$HM/mv/phase-b/STATUS.md" > "$HM/mv/.claude/brain"; hook "$HM/plain" CD_BRAIN=mv
-check "pointer the hooks refuse (absolute path): the registered STATUS is the fallback" has "$out" status-of-mv-old
-rm "$HM/mv/.claude/brain"; hook "$HM/plain" CD_BRAIN=mv
-check "no pointer at the root: the registered STATUS" has "$out" status-of-mv-old
-echo ../a/STATUS.md > "$HM/mv/.claude/brain"; rm "$HM/mv/phase-a/STATUS.md"; hook "$HM/plain" CD_BRAIN=mv
-check "pointer refused and registered STATUS missing: one warning line" refused "$out" 'brain "mv"'
+# --- a version 1 registry is still read: dir = the STATUS file's folder, status = its name -----------------------
+mkdir -p "$HM/v1/.claude" "$HM/v1/phase-a"; printf 'status-of-v1\n' > "$HM/v1/phase-a/STATUS.md"
+registry1 "$REG" v1 "$HM/v1" "$HM/v1/phase-a/STATUS.md" v1rel "$HM/v1" phase-a/STATUS.md
+cp "$REG" "$T/reg.v1"
+hook "$HM/plain" CD_BRAIN=v1
+check "version 1 registry: an entry with an absolute STATUS in a subfolder loads it" \
+  eval 'has "$out" status-of-v1 && has "$out" "loaded from $HM/v1/phase-a/STATUS.md (brain \"v1\""'
+hook "$HM/plain" CD_BRAIN=v1rel
+check "version 1 registry: an entry with a relative STATUS (never valid there) is refused with one line" \
+  refused "$out" 'brain "v1rel"'
+check "version 1 registry: reading it never rewrites it (the hooks never write the registry)" cmp -s "$REG" "$T/reg.v1"
+mkdir -p "$HM/v1/phase-b"; printf 'status-of-pointer\n' > "$HM/v1/phase-b/STATUS.md"
+echo phase-b/STATUS.md > "$HM/v1/.claude/brain"; printf "status-of-pointer
+" > "$HM/v1/phase-a/other.md"
+mkdir -p "$HM/v1/phase-a/.claude"; echo other.md > "$HM/v1/phase-a/.claude/brain"
+hook "$HM/plain" CD_BRAIN=v1
+check "a registered brain ignores any .claude/brain pointer near its folder" \
+  eval 'has "$out" status-of-v1 && ! has "$out" status-of-pointer'
+registry "$REG" a "$HM/a" STATUS.md b "$HM/b/notes" STATUS.md
 
 # --- the registry itself ------------------------------------------------------------------------------------------
 regcheck() {   # regcheck <description>: CD_BRAIN=a must give one warning naming the registry, quickly
@@ -176,19 +189,21 @@ regcheck() {   # regcheck <description>: CD_BRAIN=a must give one warning naming
 rm -f "$REG"; regcheck "no registry"
 printf '{"version": 1, "brains": ' > "$REG"; regcheck "registry that is not valid JSON"
 printf '[1, 2]' > "$REG"; regcheck "registry that is not an object"
-printf '{"version": 2, "brains": {"a": {"root": "%s", "status": "%s"}}}' "$HM/a" "$HM/a/STATUS.md" > "$REG"
+printf '{"version": 3, "brains": {"a": {"dir": "%s", "status": "STATUS.md"}}}' "$HM/a" > "$REG"
 regcheck "registry of an unknown version"
-printf '{"version": 1, "brains": {"a": {"root": 5}}}' > "$REG"; regcheck "registry entry without paths"
+printf '{"version": 2, "brains": {"a": {"dir": 5}}}' > "$REG"; regcheck "registry entry without paths"
+printf '{"version": 2, "brains": {"a": {"root": "%s", "status": "%s"}}}' "$HM/a" "$HM/a/STATUS.md" > "$REG"
+regcheck "version 2 registry holding a version 1 entry (root, absolute status)"
 rm -f "$REG"; mkfifo "$REG"; regcheck "registry is a FIFO (must not block)"
 rm -f "$REG"; python3 -I -c 'import json, sys
-d = {"version": 1, "brains": {"a": {"root": sys.argv[2], "status": sys.argv[3]}}, "pad": "x" * 1100000}
-json.dump(d, open(sys.argv[1], "w"))' "$REG" "$HM/a" "$HM/a/STATUS.md"
+d = {"version": 2, "brains": {"a": {"dir": sys.argv[2], "status": sys.argv[3]}}, "pad": "x" * 1100000}
+json.dump(d, open(sys.argv[1], "w"))' "$REG" "$HM/a" STATUS.md
 regcheck "registry over 1 MB"
-registry "$REG" a "$HM/a" "$HM/a/STATUS.md" b "$HM/b" "$HM/b/notes/STATUS.md"
+registry "$REG" a "$HM/a" STATUS.md b "$HM/b/notes" STATUS.md
 
 # $CLAUDE_CONFIG_DIR moves the registry and the choices, as it moves the rest of Claude Code's config.
 CD2="$T/other config"; mkdir -p "$CD2/brain-sessions"
-registry "$CD2/brains.json" b2 "$HM/b" "$HM/b/notes/STATUS.md"
+registry "$CD2/brains.json" b2 "$HM/b/notes" STATUS.md
 hook "$HM/a" CD_BRAIN=b2 CLAUDE_CONFIG_DIR="$CD2"
 check "CLAUDE_CONFIG_DIR set: the registry is read there" has "$out" status-of-b
 hook "$HM/a" CD_BRAIN=b2

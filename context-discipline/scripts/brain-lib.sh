@@ -12,9 +12,11 @@
 #      are read, and that line may be at most 1,024 bytes (a cloned repo's pointer is untrusted: a huge line would
 #      otherwise stall every hook).
 # A name is looked up in the registry <config>/brains.json:
-#   {"version": 1, "brains": {"<name>": {"root": "<project folder>", "status": "<STATUS file>"}}}
-# (absolute paths). Either way the STATUS file is accepted only if, with every symlink resolved, it is a regular
-# text file inside its project folder, and that folder is neither $HOME nor "/".
+#   {"version": 2, "brains": {"<name>": {"dir": "<abs brain folder>", "status": "<STATUS file, relative to dir>"}}}
+# A version 1 registry ({"root": "<project folder>", "status": "<abs STATUS file>"}) is read as if each entry's dir
+# were its STATUS file's folder and its status that file's name; /brain writes version 2 at its next change.
+# Either way the STATUS file is accepted only if, with every symlink resolved, it is a regular text file inside its
+# folder, and that folder is neither $HOME nor "/".
 # Never writes files, never touches the network.
 
 CD_POINTER_READ=4096   # bytes of a pointer that are read (the refusal reasons below say 4,096)
@@ -136,21 +138,22 @@ cd_check_pointer() {
     /*|'~'*) CD_REFUSED="must name its STATUS file by a path relative to its project folder"; return 1 ;;
   esac
   CD_ROOT=$(cd -P -- "$CD_ROOT" 2>/dev/null && pwd -P) || return 2
+  CD_DIR="$CD_ROOT"
   cd_check_status "$CD_ROOT/$rel" || return $?
   CD_REL="$rel"
   return 0
 }
 
-# cd_check_status <path>: accept <path> as the STATUS file of the project folder $CD_ROOT (symlinks already
+# cd_check_status <path>: accept <path> as the STATUS file of the brain folder $CD_DIR (symlinks already
 # resolved) only if, with every symlink resolved, it is a regular, readable text file inside that folder.
-# Sets CD_STATUS (the file, symlinks resolved), CD_SIZE (bytes) and CD_REL (its path below $CD_ROOT).
+# Sets CD_STATUS (the file, symlinks resolved), CD_SIZE (bytes) and CD_REL (its path below $CD_DIR).
 # Returns 1 with CD_REFUSED set if it is refused, 2 if it cannot be measured.
 cd_check_status() {
   local size text
   CD_STATUS=$(cd_physical "$1") || { CD_STATUS=""; CD_REFUSED="names a missing file"; return 1; }
   case "$CD_STATUS" in
-    "$CD_ROOT"/*) ;;
-    *) CD_STATUS=""; CD_REFUSED="names a file outside its project folder"; return 1 ;;
+    "$CD_DIR"/*) ;;
+    *) CD_STATUS=""; CD_REFUSED="names a file outside its folder"; return 1 ;;
   esac
   [ -f "$CD_STATUS" ] || { CD_STATUS=""; CD_REFUSED="names a missing file, or something that is not a regular file"; return 1; }
   [ -r "$CD_STATUS" ] || { CD_STATUS=""; CD_REFUSED="names a file that cannot be read"; return 1; }
@@ -160,7 +163,7 @@ cd_check_status() {
   esac
   text=$(tr -d '\000' < "$CD_STATUS" 2>/dev/null | wc -c | tr -d '[:space:]')
   [ "$text" = "$size" ] || { CD_STATUS=""; CD_REFUSED="names a file that is not text"; return 1; }
-  CD_SIZE="$size"; CD_REL="${CD_STATUS#"$CD_ROOT"/}"
+  CD_SIZE="$size"; CD_REL="${CD_STATUS#"$CD_DIR"/}"
   return 0
 }
 
@@ -250,15 +253,25 @@ import json, os, re, stat, sys
 CAP = 1_000_000
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
 BAD = re.compile(r"[\x00-\x1f\x7f]")
+WAS_V1 = [False]   # set by read_registry when the file it read was version 1
+
+
+def from_v1(brains):
+    """Convert version 1 entries in place: {"root", "status": <abs STATUS>} -> {"dir": its folder, "status": its
+    name}. An entry that cannot be converted is left as it is (and is then not usable)."""
+    for name, e in brains.items():
+        s = e.get("status") if isinstance(e, dict) else None
+        if isinstance(s, str) and s.startswith("/") and not s.endswith("/") and not BAD.search(s):
+            brains[name] = {"dir": os.path.dirname(s), "status": os.path.basename(s)}
 
 
 def read_registry(path):
-    """(registry, problem): the whole registry ({"version": 1, "brains": {}} if the file does not exist), or
-    (None, why it cannot be used)."""
+    """(registry, problem): the whole registry as version 2 ({"version": 2, "brains": {}} if the file does not
+    exist; a version 1 file converted with from_v1, and WAS_V1[0] set to True), or (None, why it cannot be used)."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except FileNotFoundError:
-        return {"version": 1, "brains": {}}, None
+        return {"version": 2, "brains": {}}, None
     except OSError:
         return None, "cannot be read"
     try:
@@ -281,24 +294,29 @@ def read_registry(path):
         return None, "is not valid JSON"
     finally:
         os.close(fd)
-    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("brains"), dict):
-        return None, 'is not a version 1 registry ({"version": 1, "brains": {...}})'
+    version = data.get("version") if isinstance(data, dict) else None
+    if version not in (1, 2) or isinstance(version, bool) or not isinstance(data.get("brains"), dict):
+        return None, 'is not a version 2 registry ({"version": 2, "brains": {...}})'
+    if version == 1:
+        from_v1(data["brains"])
+        data["version"] = 2
+        WAS_V1[0] = True
     return data, None
 
 
 def entry(brains, name):
-    """(root, status) of a valid entry, else None."""
+    """(dir, status) of a valid entry, else None."""
     e = brains.get(name)
     if not NAME.match(name) or not isinstance(e, dict):
         return None
-    root, status = e.get("root"), e.get("status")
-    if not (isinstance(root, str) and isinstance(status, str)) or BAD.search(root + status) or not root or not status:
+    d, status = e.get("dir"), e.get("status")
+    if not (isinstance(d, str) and isinstance(status, str)) or BAD.search(d + status) or not d or not status:
         return None
-    return root, status
+    return d, status
 
 
 def cmd_get(path, name):
-    """Print the root and STATUS of <name>, one per line. Exit 3: not registered; 4: registry unusable."""
+    """Print the folder and STATUS of <name>, one per line. Exit 3: not registered; 4: registry unusable."""
     reg, problem = read_registry(path)
     if reg is None:
         print(problem)
@@ -308,7 +326,7 @@ def cmd_get(path, name):
         return 3
     e = entry(brains, name)
     if e is None:
-        print("has no usable entry for it (it needs a root and a status path)")
+        print("has no usable entry for it (it needs a dir and a status path)")
         return 4
     print(e[0])
     print(e[1])
@@ -320,7 +338,7 @@ def shown(s):
 
 
 def cmd_list(path):
-    """Print one line per entry, sorted: <name> US <root> US <status> US <problem> (US = \\x1f; problem "" for a
+    """Print one line per entry, sorted: <name> US <dir> US <status> US <problem> (US = \\x1f; problem "" for a
     usable entry, else why /brain cannot use it, with names and paths made printable). Exit 4: registry unusable."""
     reg, problem = read_registry(path)
     if reg is None:
@@ -332,17 +350,17 @@ def cmd_list(path):
         if e is not None:
             print("\x1f".join((name, e[0], e[1], "")))
             continue
-        root = shown(raw.get("root")) if isinstance(raw, dict) else ""
+        d = shown(raw.get("dir") or raw.get("root")) if isinstance(raw, dict) else ""
         if not NAME.match(name):
             why = "its name is not a brain name; edit the registry to rename or remove it"
         elif not isinstance(raw, dict):
             why = "its entry is not an object; /brain add " + name + " <folder> replaces it"
-        elif not (isinstance(raw.get("root"), str) and isinstance(raw.get("status"), str)) or not raw.get("root") \
+        elif not (isinstance(raw.get("dir"), str) and isinstance(raw.get("status"), str)) or not raw.get("dir") \
                 or not raw.get("status"):
-            why = "it needs both a root and a status path; /brain add " + name + " <folder> replaces it"
+            why = "it needs both a dir and a status path; /brain add " + name + " <folder> replaces it"
         else:
             why = "a path holds a tab or another control character; /brain add " + name + " <folder> replaces it"
-        print("\x1f".join((shown(name)[:64], root, "", why)))
+        print("\x1f".join((shown(name)[:64], d, "", why)))
     return 0
 
 
@@ -350,58 +368,46 @@ COMMANDS = {"get": cmd_get, "list": cmd_list}
 PY
 CD_PY_MAIN='sys.exit(COMMANDS[sys.argv[1]](*sys.argv[2:]) or 0)'
 
-# cd_registry_get <name>: look <name> up in the registry. Sets CD_REGISTRY (its path), CD_REG_ROOT and
+# cd_registry_get <name>: look <name> up in the registry. Sets CD_REGISTRY (its path), CD_REG_DIR and
 # CD_REG_STATUS. Fails with CD_REFUSED set (to follow 'brain "<name>" ') if the name is not registered or the
 # registry cannot be used.
 cd_registry_get() {
   local out rc=0
-  CD_REGISTRY="$(cd_config_dir)/brains.json"; CD_REG_ROOT=""; CD_REG_STATUS=""
+  CD_REGISTRY="$(cd_config_dir)/brains.json"; CD_REG_DIR=""; CD_REG_STATUS=""
   command -v python3 >/dev/null 2>&1 || { CD_REFUSED="cannot be looked up: reading $CD_REGISTRY needs python3"; return 1; }
   out=$(python3 -I -c "$CD_REGISTRY_PY"$'\n'"$CD_PY_MAIN" get "$CD_REGISTRY" "$1" 2>/dev/null) || rc=$?
   case $rc in
-    0) CD_REG_ROOT="${out%%$'\n'*}"; CD_REG_STATUS="${out#*$'\n'}"; return 0 ;;
+    0) CD_REG_DIR="${out%%$'\n'*}"; CD_REG_STATUS="${out#*$'\n'}"; return 0 ;;
     3) CD_REFUSED="is not registered in $CD_REGISTRY" ;;
     *) CD_REFUSED="cannot be looked up: $CD_REGISTRY ${out:-cannot be read}" ;;
   esac
   return 1
 }
 
-# cd_check_named <root> <status> [name]: accept a registered brain. <root> must be an existing project folder
-# (absolute, not $HOME or "/"). Its STATUS is the one its own <root>/.claude/brain names when that pointer exists
-# and is accepted, so a project that moves its STATUS on is followed; otherwise the registered <status>, an
-# absolute path that cd_check_status accepts. Sets what cd_check_status sets, CD_ROOT, and CD_NOTE: "" or why the
-# registered STATUS is not the one used (for /brain to show; [name] goes into its advice).
+# cd_check_brain <dir> <status> [name]: accept a registered brain. <dir> must be an existing folder, named by an
+# absolute path, that is not $HOME or "/"; <status> names its STATUS file by a path relative to <dir>, which
+# cd_check_status must accept. No .claude/brain pointer is ever read. Sets what cd_check_status sets and CD_DIR
+# (the folder, symlinks resolved); [name] goes into the advice of a refusal.
 # Returns 1 with CD_REFUSED set if it is refused, 2 if the STATUS cannot be measured.
-cd_check_named() {
-  local home name="${3:-<name>}" ptr_problem="" reg="" rc
-  CD_NOTE=""
-  case "$1" in /*) ;; *) CD_REFUSED="must name its project folder by an absolute path"; return 1 ;; esac
-  CD_ROOT=$(cd -P -- "$1" 2>/dev/null && pwd -P) || {
-    CD_ROOT=""
-    CD_REFUSED="names a missing project folder ($1); if it moved, /brain add $name <folder> points it at the new one"
+cd_check_brain() {
+  local home name="${3:-<name>}"
+  CD_DIR=""; CD_ROOT=""
+  case "$1" in /*) ;; *) CD_REFUSED="must name its folder by an absolute path; /brain add $name <folder> replaces it"; return 1 ;; esac
+  CD_DIR=$(cd -P -- "$1" 2>/dev/null && pwd -P) || {
+    CD_DIR=""
+    CD_REFUSED="names a missing folder ($1); if it moved, /brain add $name <folder> points it at the new one"
     return 1
   }
   home=$(cd -P -- "${HOME:-/}" 2>/dev/null && pwd -P) || home="${HOME%/}"
-  if [ "$CD_ROOT" = / ] || [ "$CD_ROOT" = "$home" ]; then
-    CD_REFUSED="names your home folder or / as its project folder (~/.claude there is Claude Code's config)"
-    CD_ROOT=""; return 1
+  if [ "$CD_DIR" = / ] || [ "$CD_DIR" = "$home" ]; then
+    CD_REFUSED="names your home folder or / as its folder; give the brain a folder of its own"
+    CD_DIR=""; return 1
   fi
-  case "$2" in /*) reg=$(cd_physical "$2" 2>/dev/null) || reg="$2" ;; esac
-  if [ -f "$CD_ROOT/.claude/brain" ]; then
-    CD_POINTER="$CD_ROOT/.claude/brain"
-    cd_check_pointer; rc=$?
-    if [ "$rc" = 0 ]; then
-      [ "$CD_STATUS" = "$reg" ] || \
-        CD_NOTE="its .claude/brain now names $CD_REL; the registry still says $2 (/brain add $name updates it)"
-      return 0
-    fi
-    [ "$rc" = 1 ] && ptr_problem="$CD_POINTER $CD_REFUSED"
-    CD_POINTER=""
-  fi
-  [ -n "$reg" ] || { CD_REFUSED="must name its STATUS file by an absolute path"; return 1; }
-  cd_check_status "$2" || return $?
-  [ -n "$ptr_problem" ] && CD_NOTE="$ptr_problem, so the registered STATUS is used"
-  return 0
+  case "$2" in
+    /*|'~'*) CD_REFUSED="must name its STATUS file by a path relative to its folder"; return 1 ;;
+  esac
+  CD_ROOT="$CD_DIR"
+  cd_check_status "$CD_DIR/$2"
 }
 
 # cd_select_brain <json>: which brain this session uses (the rules at the top of this file), for a hook's input
@@ -413,8 +419,8 @@ cd_check_named() {
 # CD_HOOKS=off, or the project cannot be read.
 cd_select_brain() {
   local cwd key name
-  CD_HOW=""; CD_NAME=""; CD_SUBJECT=""; CD_REFUSED=""; CD_ROOT=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""; CD_POINTER=""
-  CD_NOTE=""
+  CD_HOW=""; CD_NAME=""; CD_SUBJECT=""; CD_REFUSED=""; CD_ROOT=""; CD_DIR=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""
+  CD_POINTER=""
   [ "${CD_HOOKS:-}" = off ] && return 2
   cwd=$(cd_session_cwd "$1") || return 2
   LC_ALL=C; export LC_ALL
@@ -438,5 +444,5 @@ cd_select_brain() {
   fi
   CD_SUBJECT="brain \"$name\" (chosen with $CD_HOW)"
   cd_registry_get "$name" || return 1
-  cd_check_named "$CD_REG_ROOT" "$CD_REG_STATUS" "$name"
+  cd_check_brain "$CD_REG_DIR" "$CD_REG_STATUS" "$name"
 }
