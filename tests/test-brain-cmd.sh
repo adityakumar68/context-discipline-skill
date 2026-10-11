@@ -519,6 +519,18 @@ if [ -r "/proc/$$/stat" ]; then
     eval '(. "$S/brain-lib.sh"; cd_process_start $$) | grep -Eq "^boot\+[0-9]+$"'
 fi
 
+# --- writes are serialised: /brain commands run at the same time lose no update -------------------------------------
+cp "$REG" "$T/reg.keep"
+for i in $(seq 1 16); do mkdir -p "$HM/par/b$i"; echo s > "$HM/par/b$i/STATUS.md"; done
+for i in $(seq 1 16); do
+  (cd "$HM/plain" && env HOME="$HM" CLAUDE_PID=$$ perl -e 'alarm shift; exec @ARGV' 30 bash "$B" add "par$i" "$HM/par/b$i" \
+    >/dev/null 2>&1 < /dev/null) &
+done
+wait
+check "16 /brain add at once: all 16 registered (a lock around each registry write)" \
+  reg "all(('par%d' % i) in b for i in range(1, 17))"
+cp "$T/reg.keep" "$REG"
+
 # --- help and unknown words ------------------------------------------------------------------------------------------
 bc "$HM/plain" help
 all_in() { local t="$1"; shift; for w in "$@"; do has "$t" "$w" || return 1; done; }

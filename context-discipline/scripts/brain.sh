@@ -63,7 +63,29 @@ EOF
 # 5 already registered the same way, 6 name in use (its folder printed), 7 entry updated (prints what changed:
 # "status<TAB>old", "dir<TAB>old" or "entry<TAB>").
 IFS= read -r -d '' BRAIN_PY <<'PY' || true
-import tempfile
+import fcntl, tempfile, time
+
+
+def lock(path):
+    """Hold an exclusive lock on <registry>.lock (beside the registry's real file) until this process ends, so two
+    /brain commands never read-modify-write the registry at once. Waits up to 10 s, then gives up (exit 4)."""
+    real = os.path.realpath(path)
+    try:
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        fd = os.open(real + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        print(f"cannot write {path}: {e.strerror or e}")
+        sys.exit(4)
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() > deadline:
+                print(f"{path} is busy (another /brain is writing it); run /brain again")
+                sys.exit(4)
+            time.sleep(0.05)
 
 
 def load(path):
@@ -108,6 +130,7 @@ def save(path, reg):
 def cmd_set(path, name, folder, status):
     """Register <name>. An existing entry is updated if it is for the same folder, if its folder no longer exists
     (the brain moved), or if it is unusable; any other existing entry is left alone (6)."""
+    lock(path)
     reg = load(path)
     old = reg["brains"].get(name)
     if old == {"dir": folder, "status": status}:
@@ -137,6 +160,7 @@ def cmd_set(path, name, folder, status):
 
 
 def cmd_rename(path, old, new):
+    lock(path)
     reg = load(path)
     if old not in reg["brains"]:
         return 3
@@ -150,6 +174,7 @@ def cmd_rename(path, old, new):
 
 
 def cmd_remove(path, name):
+    lock(path)
     reg = load(path)
     if name not in reg["brains"]:
         return 3
@@ -164,6 +189,8 @@ def cmd_upgrade(path, ts, dry):
     summary line, or nothing if there is no registry or it is already version 2."""
     if not os.path.lexists(path):
         return 0
+    if dry != "1":
+        lock(path)
     reg, problem = read_registry(path)
     if reg is None:
         print(f"NOTE: {path} {problem}, so it was left as it is; /brain cannot use it until it is fixed")
