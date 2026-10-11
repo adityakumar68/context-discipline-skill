@@ -25,14 +25,14 @@ has() { printf '%s' "$1" | grep -qF -- "$2"; }
 only_templates() { [ "$(ls -A "$1" | LC_ALL=C sort | paste -sd, -)" = "00-Project-Overview.md,STATUS.md" ]; }
 
 # --- what it writes ---------------------------------------------------------------------------------------------------
-mkdir -p "$HM/p1"; out=$(init "$HM/p1" phd); rc=$?
+mkdir -p "$HM/p1"; out=$(init "$HM/p1" alpha); rc=$?
 check "writes STATUS.md and 00-Project-Overview.md, nothing else (no pointer, no .gitignore), exit 0" \
   eval '[ $rc = 0 ] && only_templates "$HM/p1"'
-check "the name goes into the headings" eval 'grep -qF "phd — STATUS" "$HM/p1/STATUS.md" && grep -qF "phd — Project Overview" "$HM/p1/00-Project-Overview.md"'
+check "the name goes into the headings" eval 'grep -qF "alpha — STATUS" "$HM/p1/STATUS.md" && grep -qF "alpha — Project Overview" "$HM/p1/00-Project-Overview.md"'
 check "summary names both files and gives the STATUS limit in characters (9,000)" \
   eval 'has "$out" "$HM/p1/STATUS.md (created)" && has "$out" "$HM/p1/00-Project-Overview.md (created)" && has "$out" "9,000 characters"'
 echo edit >> "$HM/p1/STATUS.md"; before=$(cat "$HM/p1/STATUS.md" "$HM/p1/00-Project-Overview.md" | cksum)
-out=$(init "$HM/p1" phd); rc=$?
+out=$(init "$HM/p1" alpha); rc=$?
 check "second run: overwrites nothing, says both exist, exit 0" \
   eval '[ $rc = 0 ] && [ "$(cat "$HM/p1/STATUS.md" "$HM/p1/00-Project-Overview.md" | cksum)" = "$before" ] && [ "$(printf "%s\n" "$out" | grep -c "exists, left untouched")" = 2 ]'
 mkdir -p "$HM/My Folder"; init "$HM/My Folder" >/dev/null
@@ -82,9 +82,9 @@ fi
 
 # --- whatever init-brain sets up, the hook loads once it is registered ------------------------------------------------
 python3 -I -c 'import json, sys
-json.dump({"version": 2, "brains": {"phd": {"dir": sys.argv[2], "status": "STATUS.md"}}}, open(sys.argv[1], "w"))' \
+json.dump({"version": 2, "brains": {"alpha": {"dir": sys.argv[2], "status": "STATUS.md"}}}, open(sys.argv[1], "w"))' \
   "$HM/.claude/brains.json" "$HM/p1"
-out=$(printf '{"source": "startup"}' | env -u CLAUDE_PROJECT_DIR HOME="$HM" CD_BRAIN=phd bash "$H" | tail -n 1)
+out=$(printf '{"source": "startup"}' | env -u CLAUDE_PROJECT_DIR HOME="$HM" CD_BRAIN=alpha bash "$H" | tail -n 1)
 check "the hook loads the STATUS it wrote" has "$out" "loaded from $HM/p1/STATUS.md"
 
 echo "== init-brain tests: $pass passed, $fail failed"

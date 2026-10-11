@@ -697,7 +697,8 @@ Next steps:
   3. Check the SessionStart hook loads a brain (it prints its STATUS, then a "(Project brain ..." line):
        echo '{"source": "startup"}' | CD_BRAIN=<name> bash "$HOOK"
   4. Used folder pointers (.claude/brain) with an earlier version? The hooks no longer read them: in
-     Claude Code, run /brain add <name> from each folder that has one.
+     Claude Code, run /brain add <name> from each folder that has one. Windows open now lose that brain at
+     their next /clear or compaction: restart them, then /brain add <name> (or /brain <name> once added).
 To update later: git pull && ./install.sh
 EOF
 fi

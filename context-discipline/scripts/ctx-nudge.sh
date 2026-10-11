@@ -35,8 +35,9 @@
 # the hook stays silent rather than repeat itself).
 #
 # STATUS changed under this window: several windows may share a brain. The SessionStart hook records, per window,
-# the STATUS it printed and its mtime (ns), size and inode (<config>/brain-sessions/seen-<window key>). At each prompt this hook
-# stats STATUS once; if it changed since, it adds one note (re-read it before relying on it or editing it) and
+# the STATUS it printed and its mtime (ns), size and inode (<config>/brain-sessions/seen-<window key>). At each
+# prompt this hook stats STATUS once; if it changed since, it adds one note (re-read it before relying on it or
+# editing it) and
 # records the new mtime, so the note comes once per change. A change made by this session's own main-thread Edit,
 # Write, MultiEdit, NotebookEdit or Bash call that names the STATUS path (also as ~/...) since the previous prompt is
 # recorded without a note; reading STATUS never counts. No record yet (or a

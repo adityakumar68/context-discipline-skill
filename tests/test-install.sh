@@ -113,6 +113,8 @@ check "fresh: summary gives the next steps (/hooks check, /brain new and /brain 
   eval 'printf "%s" "$out" | grep -q "/hooks" && printf "%s" "$out" | grep -q "/brain new <name>" && printf "%s" "$out" | grep -q "/brain <name>" && printf "%s" "$out" | grep -qF "CD_BRAIN=<name> bash"'
 check "fresh: summary tells users of old folder pointers to run /brain add <name> from those folders" \
   eval 'printf "%s" "$out" | grep -qF ".claude/brain" && printf "%s" "$out" | grep -q "/brain add <name>"'
+check "fresh: summary says Claude Code windows open during the upgrade lose a pointer brain: restart them first" \
+  eval 'printf "%s" "$out" | grep -q "Windows open now" && printf "%s" "$out" | grep -q "restart"'
 check "fresh: summary no longer sends anyone to init-brain.sh" eval '! printf "%s" "$out" | grep -q "init-brain"'
 check "fresh: the CLAUDE.md line no longer speaks of a .claude/brain pointer, and names /brain" \
   eval '! grep -qF ".claude/brain" "$C/CLAUDE.md" && grep -qF "/brain" "$C/CLAUDE.md"'
