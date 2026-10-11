@@ -37,8 +37,9 @@
 # STATUS changed under this window: several windows may share a brain. The SessionStart hook records, per window,
 # the STATUS it printed and its mtime and size (<config>/brain-sessions/seen-<window key>). At each prompt this hook
 # stats STATUS once; if it changed since, it adds one note (re-read it before relying on it or editing it) and
-# records the new mtime, so the note comes once per change. A change made by this session's own main-thread tool
-# call (one that names the STATUS path) since the previous prompt is recorded without a note. No record yet (or a
+# records the new mtime, so the note comes once per change. A change made by this session's own main-thread Edit,
+# Write, MultiEdit, NotebookEdit or Bash call that names the STATUS path (also as ~/...) since the previous prompt is
+# recorded without a note; reading STATUS never counts. No record yet (or a
 # record of another brain): recorded, no note.
 #
 # Contract: prints nothing, or one JSON object with additionalContext. Never blocks the prompt, always exits 0,
@@ -334,8 +335,12 @@ def stale_check(status, seen):
     return False, mark   # no record yet, or one of another brain: record it, say nothing
 
 
+WRITERS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "Bash")   # tools that can change a file; Read, Grep... cannot
+
+
 def touched_in(lines, base, since, needles):
-    """Whether a main-thread tool call written at or after offset since (anywhere if None) names one of needles."""
+    """Whether a main-thread call of a tool that can write (WRITERS), written at or after offset since (anywhere if
+    None), names one of needles. Reading STATUS never counts: the change may still be another session's."""
     keys = [n.encode("utf-8") for n in needles]
     off = base
     for line in lines:
@@ -347,7 +352,7 @@ def touched_in(lines, base, since, needles):
             continue
         content = r.get("message", {}).get("content") if isinstance(r.get("message"), dict) else None
         for c in content if isinstance(content, list) else []:
-            if isinstance(c, dict) and c.get("type") == "tool_use":
+            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") in WRITERS:
                 text = json.dumps(c.get("input"), ensure_ascii=False)
                 if any(n in text for n in needles):
                     return True
@@ -364,13 +369,23 @@ def main():
     status = os.environ.get("CD_STATUS") or ""
     seen = os.environ.get("CD_SEEN") or ""
     changed, mark = stale_check(status, seen)
-    needles = [n for n in dict.fromkeys((status, os.environ.get("CD_STATUS_REG") or "")) if n] if changed else []
+    needles = []
+    if changed:
+        paths = [n for n in (status, os.environ.get("CD_STATUS_REG") or "") if n]
+        for home in {os.environ.get("HOME") or "", os.path.realpath(os.environ.get("HOME") or "/")}:
+            home = home.rstrip("/")
+            if home:   # the same file as Claude often names it in a shell command: ~/...
+                paths += ["~" + n[len(home):] for n in paths if n.startswith(home + "/")]
+        needles = list(dict.fromkeys(paths))
     note, touched = None, False
     path = hook.get("transcript_path")
     if isinstance(path, str) and os.path.isfile(path):
-        folder = state_dir()
-        if folder is not None:
-            note, touched = context_note(hook, path, folder, needles)
+        try:   # a failure here (say an unusable TMPDIR) must not cost the changed-STATUS note
+            folder = state_dir()
+            if folder is not None:
+                note, touched = context_note(hook, path, folder, needles)
+        except Exception:
+            note, touched = None, False
     notes = []
     if mark is not None:
         if changed and not touched:

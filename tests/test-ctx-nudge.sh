@@ -42,6 +42,8 @@ TR="$T/tr"; mkdir -p "$TR"
 #   cutb:<uuid> a compact boundary still being written (its first 40 bytes, no newline: must be last)
 #   e:<path>    main-thread Edit of <path>     se:<path>  the same in a subagent (isSidechain)
 #   bash:<path> main-thread Bash command that names <path>
+#   write:<path> multi:<path> nb:<path>   main-thread Write, MultiEdit, NotebookEdit of <path>
+#   read:<path> grep:<path> glob:<path>   main-thread Read, Grep, Glob that name <path> (they write nothing)
 gen() {
   python3 -I - "$@" <<'PY'
 import json, sys
@@ -86,12 +88,24 @@ for spec in sys.argv[2:]:
         lines.append("{not json")
     elif k == "cut":
         lines.append(call(150000)[:60])
-    elif k in ("e", "se", "bash"):
+    elif k in ("e", "se", "bash", "write", "multi", "nb", "read", "grep", "glob"):
         r = json.loads(call(1000, side=(k == "se")))
         use = {"type": "tool_use", "id": "t%d" % n[0], "name": "Edit",
                "input": {"file_path": a[0], "old_string": "x", "new_string": "y"}}
         if k == "bash":
             use.update(name="Bash", input={"command": "sed -i '' 's/a/b/' " + a[0]})
+        elif k == "write":
+            use.update(name="Write", input={"file_path": a[0], "content": "new"})
+        elif k == "multi":
+            use.update(name="MultiEdit", input={"file_path": a[0], "edits": [{"old_string": "x", "new_string": "y"}]})
+        elif k == "nb":
+            use.update(name="NotebookEdit", input={"notebook_path": a[0], "new_source": "y"})
+        elif k == "read":
+            use.update(name="Read", input={"file_path": a[0]})
+        elif k == "grep":
+            use.update(name="Grep", input={"pattern": "Next steps", "path": a[0]})
+        elif k == "glob":
+            use.update(name="Glob", input={"pattern": "*.md", "path": a[0]})
         r["message"]["content"] = [use]
         lines.append(json.dumps(r, separators=(",", ":")))
 with open(out, "w") as f:
@@ -380,6 +394,29 @@ gen "$TR/s" a:1000 u "e:$ST" u "bash:$ST" u "se:$ST" u "e:$P/docs/OTHER.md"; lat
 check "an own Edit of another file does not hide the change: noted" stale
 later 70; run "$P" - "$W" CLAUDE_PID=$$
 check "no transcript_path in the input: the change is still noted" stale
+# Only tools that can write count as the session's own change; reading STATUS (as the note itself asks) never hides
+# another session's change.
+T7="$TR/s7"; W7="sess-$((++k))"; gen "$T7" a:1000; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+for tool in read grep glob; do
+  gen "$T7" a:1000 u "$tool:$ST"; later 200; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+  check "this session's $tool of STATUS since the previous prompt, then another session's change: noted" stale
+  gen "$T7" a:1000; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+done
+for tool in write multi; do
+  gen "$T7" a:1000 u "$tool:$ST"; later 300; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+  check "this session's own $tool of STATUS: no note" quiet
+  gen "$T7" a:1000; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+done
+gen "$T7" a:1000 u "nb:$ST"; later 400; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+check "this session's own NotebookEdit naming STATUS: no note" quiet
+gen "$T7" a:1000; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+gen "$T7" a:1000 u "bash:~${ST#"$HM"}"; later 500; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+check "this session's own Bash command naming STATUS as ~/... (\$HOME): no note" quiet
+gen "$T7" a:1000; run "$P" "$T7" "$W7" CLAUDE_PID=$$
+mkdir -p "$T/notmp"; echo file > "$T/notmp/file"; later 600
+out=$(python3 -I -c 'import json,sys; print(json.dumps({"session_id": sys.argv[1], "transcript_path": sys.argv[2], "cwd": sys.argv[3]}))' "$W7" "$T7" "$P" \
+  | env -u CLAUDE_PROJECT_DIR HOME="$HM" TMPDIR="$T/notmp/file" CD_BRAIN=p CLAUDE_PID=$$ bash "$N" 2>&1); rc=$?
+check "the context state cannot be kept (TMPDIR is a file): the changed-STATUS note still comes" stale
 later 80; gen "$TR/s2" a:150000; run "$P" "$TR/s2" "sess-$((++k))" CLAUDE_PID=$$
 check "change and a context step at the same prompt: both notes in one additionalContext" \
   eval 'stale && nudged "75%" && [ "$(printf "%s" "$out" | grep -c additionalContext)" = 1 ]'

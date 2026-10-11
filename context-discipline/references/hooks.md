@@ -93,8 +93,9 @@ who registers it.
   once and compares it with this window's record. If it changed, it adds one note,
   `STATUS.md of brain "<name>" (<path>) was updated since this session last read it (probably by another session);
   re-read it before relying on it or editing it.`, and records the new mtime, so it comes once per change. A change
-  made by this session's own main-thread tool call (one that names the STATUS path) since the previous prompt is
-  recorded without a note; a subagent's edit is noted. No record yet (the hooks were installed mid-session): it
+  made by this session's own main-thread Edit, Write, MultiEdit, NotebookEdit or Bash call that names the STATUS path
+  (also as `~/...`) since the previous prompt is recorded without a note; a read of STATUS never hides a change, and a
+  subagent's edit is noted. No record yet (the hooks were installed mid-session): it
   records one, no note. Both notes may come in one `additionalContext`.
 - Window, first that applies: `CD_CTX_WINDOW` (tokens); `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; `autoCompactWindow` from
   settings (managed, project `.claude/settings.local.json`, `.claude/settings.json`, then user settings;
