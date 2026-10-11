@@ -82,7 +82,7 @@ check "add the same brain under the same name again: says so, registry unchanged
 bc "$HM/b" add alpha
 check "add a name taken by another brain: refused (exit 0), registry unchanged" \
   eval '[ $rc = 0 ] && has "$out" "brain: " && has "$out" "alpha" && cmp -s "$REG" "$T/reg.before"'
-for n in Bad_Name -x "$(printf 'x%.0s' $(seq 1 33))" none add new rename remove help list; do
+for n in Bad_Name -x "$(printf 'x%.0s' $(seq 1 33))" none auto add new rename remove help list; do
   bc "$HM/c" add "$n"
   check "add with name '${n:0:12}': refused (not a name, or reserved), registry unchanged" \
     eval '[ $rc = 0 ] && has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
@@ -179,6 +179,28 @@ printf 'alpha\n%s\n' "$(. "$S/brain-lib.sh"; cd_process_start $PPID)" > "$SES/pi
 bc "$HM/a" beta
 check "writing a choice prunes 8-day-old choices of finished windows" eval '[ ! -e "$SES/pid-1" ] && [ ! -e "$SES/sid-old" ]'
 check "... and keeps recent ones, and old ones whose window still runs" eval '[ -e "$SES/sid-recent" ] && [ -e "$SES/pid-$PPID" ]'
+
+# --- auto: drop this window's choice, so the default applies again ---------------------------------------------------
+bc "$HM/a" auto
+check "/brain auto: removes this window's choice file, exit 0" eval '[ $rc = 0 ] && [ ! -e "$SES/pid-$$" ]'
+check "/brain auto inside a folder brain: says the default is that folder brain and prints its STATUS" \
+  eval 'has "$out" "default" && has "$out" "folder brain $HM/a" && has "$out" status-of-a'
+check "after /brain auto the hooks use the folder walk-up again" eval 'has "$(hookout "$HM/a")" status-of-a'
+bc "$HM/plain" CD_BRAIN=beta -- auto
+check "/brain auto with CD_BRAIN=beta: says beta (from CD_BRAIN) and prints its STATUS" \
+  eval 'has "$out" "brain \"beta\"" && has "$out" CD_BRAIN && has "$out" status-of-b'
+bc "$HM/plain" auto
+check "/brain auto with no default brain: says so, and to disregard an earlier STATUS" \
+  eval 'has "$out" "no project brain" && has "$out" "isregard" && ! has "$out" status-of'
+bc "$HM/plain" auto
+check "/brain auto twice: still fine" eval '[ $rc = 0 ] && ! hasline "$out" "^brain: "'
+out=$(cd "$HM/a" && env HOME="$HM" bash "$B" auto 2>&1)
+check "/brain auto outside Claude Code (no CLAUDE_PID): refused, says why" eval 'has "$out" "brain: " && has "$out" CLAUDE_PID'
+bc "$HM/plain" help
+check "help shows /brain auto" has "$out" "/brain auto"
+bc "$HM/plain"
+check "the list's closing line names /brain auto" has "$out" "/brain auto"
+bc "$HM/a" beta
 
 # --- rename and remove: registry only --------------------------------------------------------------------------------
 before_b=$(tree "$HM/b")
