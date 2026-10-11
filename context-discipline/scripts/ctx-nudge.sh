@@ -2,9 +2,9 @@
 # ctx-nudge.sh -- UserPromptSubmit hook for the context-discipline skill.
 #
 # When the session has a brain (picked as the SessionStart hook picks it, from brain-lib.sh: /brain in this window,
-# else CD_BRAIN, else the folder walk-up) it measures
-# how full the session's context is and, at 40% of the window and then at every further 15% (55, 70, 85, 100),
-# adds a short note for Claude (hookSpecificOutput.additionalContext): update STATUS at the next natural break,
+# else CD_BRAIN, else the folder walk-up) it measures how full the session's context is and, at 40% of the window
+# and then at every further 15% (55, 70, 85, 100), adds a short note for Claude
+# (hookSpecificOutput.additionalContext): update STATUS at the next natural break,
 # write a handoff note if a new sub-task starts, then suggest /clear or /compact <focus> to the user. Each step
 # is noted once per session; the steps start again after a compaction.
 #

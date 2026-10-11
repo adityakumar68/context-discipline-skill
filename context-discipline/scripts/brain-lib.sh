@@ -178,8 +178,9 @@ cd_valid_name() {
   [ "${#1}" -le 32 ]
 }
 
-# cd_printable <text>: <text> with control characters replaced by "?", at most 64 bytes (for messages).
-cd_printable() { printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '?' | head -c 64; }
+# cd_printable <text> [max]: <text> with control characters replaced by "?", at most <max> bytes (default 64),
+# for messages.
+cd_printable() { printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '?' | head -c "${2:-64}"; }
 
 # cd_process_start <pid>: when process <pid> started, as ps prints it ("" if ps cannot tell). Kept with a
 # window's choice, so a later process that gets the same PID does not inherit the choice.
@@ -235,11 +236,12 @@ BAD = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def read_registry(path):
-    """(brains, problem): the registry's "brains" object ({} if the file does not exist), or (None, why not)."""
+    """(registry, problem): the whole registry ({"version": 1, "brains": {}} if the file does not exist), or
+    (None, why it cannot be used)."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except FileNotFoundError:
-        return {}, None
+        return {"version": 1, "brains": {}}, None
     except OSError:
         return None, "cannot be read"
     try:
@@ -264,7 +266,7 @@ def read_registry(path):
         os.close(fd)
     if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("brains"), dict):
         return None, 'is not a version 1 registry ({"version": 1, "brains": {...}})'
-    return data["brains"], None
+    return data, None
 
 
 def entry(brains, name):
@@ -280,10 +282,11 @@ def entry(brains, name):
 
 def cmd_get(path, name):
     """Print the root and STATUS of <name>, one per line. Exit 3: not registered; 4: registry unusable."""
-    brains, problem = read_registry(path)
-    if brains is None:
+    reg, problem = read_registry(path)
+    if reg is None:
         print(problem)
         return 4
+    brains = reg["brains"]
     if name not in brains:
         return 3
     e = entry(brains, name)
@@ -297,10 +300,11 @@ def cmd_get(path, name):
 
 def cmd_list(path):
     """Print one line per usable entry: <name> TAB <root> TAB <status>, sorted. Exit 4: registry unusable."""
-    brains, problem = read_registry(path)
-    if brains is None:
+    reg, problem = read_registry(path)
+    if reg is None:
         print(problem)
         return 4
+    brains = reg["brains"]
     for name in sorted(brains):
         e = entry(brains, name)
         if e is not None and "\t" not in e[0] + e[1]:
