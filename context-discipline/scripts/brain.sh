@@ -159,7 +159,38 @@ def cmd_remove(path, name):
     return 0
 
 
-COMMANDS.update(set=cmd_set, rename=cmd_rename, remove=cmd_remove)
+def cmd_upgrade(path, ts, dry):
+    """For install.sh: convert a version 1 registry to version 2, after a backup to <path>.bak-<ts>. Prints one
+    summary line, or nothing if there is no registry or it is already version 2."""
+    if not os.path.lexists(path):
+        return 0
+    reg, problem = read_registry(path)
+    if reg is None:
+        print(f"NOTE: {path} {problem}, so it was left as it is; /brain cannot use it until it is fixed")
+        return 0
+    if not WAS_V1[0]:
+        return 0
+    n = len(reg["brains"])
+    n = f"{n} brain" + ("" if n == 1 else "s")
+    if dry == "1":
+        print(f"would convert it from version 1 to version 2 ({n}); backup first to {path}.bak-{ts}")
+        return 0
+    backup = f"{path}.bak-{ts}"
+    k = 2
+    while os.path.lexists(backup):
+        backup, k = f"{path}.bak-{ts}-{k}", k + 1
+    try:
+        import shutil
+        shutil.copy2(path, backup)
+    except OSError as e:
+        print(f"NOTE: cannot back up {path} ({e.strerror or e}), so it was left as version 1")
+        return 0
+    save(path, reg)
+    print(f"converted from version 1 to version 2 ({n}); backup: {backup}")
+    return 0
+
+
+COMMANDS.update(set=cmd_set, rename=cmd_rename, remove=cmd_remove, upgrade=cmd_upgrade)
 PY
 
 # regpy <command> <args>...: run a registry command; its output on stdout, its exit code returned.
@@ -562,6 +593,15 @@ list() {
 }
 
 usage_err() { echo "brain: wrong arguments."; usage; }
+
+# --upgrade-registry <ts> [--dry-run]: for install.sh only (never reachable through --args): convert a version 1
+# registry to version 2, backing it up first; prints one summary line, or nothing.
+if [ "${1-}" = --upgrade-registry ] && { [ $# = 2 ] || { [ $# = 3 ] && [ "$3" = --dry-run ]; }; }; then
+  command -v python3 >/dev/null 2>&1 || exit 0
+  out=$(regpy upgrade "$REG" "$2" "$([ $# = 3 ] && echo 1 || echo 0)")
+  [ -n "$out" ] && printf '%s\n' "$out"
+  exit 0
+fi
 
 # --args: the /brain skill passes the user's raw argument string on stdin, in a quoted heredoc that the shell never
 # reads. Split it into words with xargs, which honours '...', "..." and backslashes and expands nothing.

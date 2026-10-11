@@ -11,7 +11,9 @@
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
-CLAUDE_MD_LINE='- For any work that spans many steps or sessions (projects, research surveys, designs, specs, plans, subagent dispatches, reviews), follow the `context-discipline` skill: the main agent coordinates; subagents put deliverables in files and hand back about 15 lines; keep the project brain (STATUS.md, auto-loaded through a `.claude/brain` pointer) current at every decision.'
+CLAUDE_MD_LINE='- For any work that spans many steps or sessions (projects, research surveys, designs, specs, plans, subagent dispatches, reviews), follow the `context-discipline` skill: the main agent coordinates; subagents put deliverables in files and hand back about 15 lines; keep the session'"'"'s brain (STATUS.md, attached with `/brain` and loaded at every session start) current at every decision.'
+# The line earlier versions appended: replaced by the one above on install, removed on uninstall.
+CLAUDE_MD_OLD='- For any work that spans many steps or sessions (projects, research surveys, designs, specs, plans, subagent dispatches, reviews), follow the `context-discipline` skill: the main agent coordinates; subagents put deliverables in files and hand back about 15 lines; keep the project brain (STATUS.md, auto-loaded through a `.claude/brain` pointer) current at every decision.'
 
 usage() {
   cat <<'EOF'
@@ -20,19 +22,21 @@ Usage: ./install.sh [--dry-run] [--uninstall] [--skip-claude-md] [-h|--help]
 Installs the context-discipline skill for Claude Code into $CLAUDE_CONFIG_DIR, or ~/.claude if that is unset:
   1. Skill:     copies context-discipline/ to <dir>/skills/context-discipline/
                 (an existing copy that differs is first moved to <dir>/skill-backups/)
-  2. /brain:    copies brain/ to <dir>/skills/brain/, the /brain command that lists, picks and registers
-                named brains (same backup rule; a different skill already called "brain" is left alone)
+  2. /brain:    copies brain/ to <dir>/skills/brain/, the /brain command that lists, attaches, creates and
+                registers brains (same backup rule; a different skill already called "brain" is left alone)
   3. Hooks:     adds three hooks to <dir>/settings.json, each in one entry with no matcher (older
                 entries for the same hook are replaced), running skills/context-discipline/scripts/...
                   SessionStart     brain-hook.sh   every source (startup, resume, clear, compact, fork):
-                                                   prints the project's STATUS file (10-second timeout)
-                  PostCompact      compact-log.sh  every compaction: saves the summary in the project
-                                                   (10-second timeout)
+                                                   prints the STATUS of the session's brain, or a one-line
+                                                   hint when it has none (10-second timeout)
+                  PostCompact      compact-log.sh  every compaction: saves the summary in
+                                                   <dir>/brain-logs/<brain>/ (10-second timeout)
                   UserPromptSubmit ctx-nudge.sh    every prompt: a short note at 40% of the context
                                                    window and every 15% after (5-second timeout)
-                The last two act only when the session has a brain: a .claude/brain above its folder,
-                or one picked by name with /brain or CD_BRAIN.
-  4. CLAUDE.md: appends one line telling Claude when to follow the skill
+                The last two act only when the session has a brain, attached with /brain or CD_BRAIN.
+  4. CLAUDE.md: appends one line telling Claude when to follow the skill (or replaces the line an
+                earlier version appended)
+A brains.json registry of version 1 (from an earlier version) is converted to version 2, after a backup.
 settings.json and CLAUDE.md are backed up to <file>.bak-<timestamp> before they are changed.
 Steps that are already done are skipped, so running it again is safe. To update: git pull && ./install.sh
 
@@ -320,7 +324,7 @@ def need_writable(path):
             fail(f"cannot change {path}: the folder {d} is read-only.")
 
 
-def cmd_check(path, md_path, line, scripts_dir, uninstall, skip_md):
+def cmd_check(path, md_path, line, old, scripts_dir, uninstall, skip_md):
     """Find every problem that would stop the run halfway, before anything is changed."""
     exists, data = load_settings(path)
     if uninstall == "1":
@@ -332,7 +336,7 @@ def cmd_check(path, md_path, line, scripts_dir, uninstall, skip_md):
     if skip_md == "1":
         return
     text = read_md(md_path)
-    changed = md_removed(text, line)[0] if uninstall == "1" else md_added(text, line)
+    changed = md_removed(text, line, old)[0] if uninstall == "1" else md_added(text, line, old)
     if changed is not None:
         need_writable(md_path)
 
@@ -425,43 +429,51 @@ def read_md(path):
         fail(f"cannot read {path}: {e}")
 
 
-def md_added(text, line):
-    """text with line appended in the file's own line endings, or None if a line already mentions the skill."""
+def md_added(text, line, old):
+    """text with line appended in the file's own line endings (or put in place of the old installer line), or None
+    if a line already mentions the skill."""
+    lines = text.splitlines(keepends=True)
+    if any(l.strip() == old.strip() for l in lines):
+        return "".join(l.replace(old.strip(), line.strip()) if l.strip() == old.strip() else l for l in lines)
     if any("context-discipline" in l for l in text.splitlines()):
         return None
     nl = "\r\n" if "\r\n" in text else "\n"
     return text + (nl if text and not text.endswith("\n") else "") + line + nl
 
 
-def md_removed(text, line):
-    """(text without the installer's line, or None if it is not there; other lines that mention the skill)."""
+def md_removed(text, line, old):
+    """(text without the installer's line, this version's or the earlier one, or None if it is not there; other
+    lines that mention the skill)."""
     lines = text.splitlines(keepends=True)
-    keep = [l for l in lines if l.strip() != line.strip()]
+    keep = [l for l in lines if l.strip() not in (line.strip(), old.strip())]
     others = [l.strip() for l in keep if "context-discipline" in l]
     return ("".join(keep) if len(keep) != len(lines) else None), others
 
 
-def cmd_md_add(path, line, ts, dry):
+def cmd_md_add(path, line, old, ts, dry):
     exists = os.path.exists(path)
-    new = md_added(read_md(path), line)
+    text = read_md(path)
+    new = md_added(text, line, old)
     if new is None:
         print("CLAUDE.md:     unchanged, a line already mentions context-discipline")
         return
+    what = "replace the earlier context-discipline line with" if old.strip() in text else "append"
     if dry == "1":
         where = f"backup first to {path}.bak-{ts}" if exists else f"new file {path}"
-        print(f"CLAUDE.md:     would append this line ({where}):")
+        print(f"CLAUDE.md:     would {what} this line ({where}):")
         print(f"               {line}")
         return
     saved = f"; backup: {backup(path, ts)}" if exists else "; created the file"
     write_atomic(path, new)
-    print(f"CLAUDE.md:     appended the context-discipline line{saved}")
+    done = "replaced the earlier context-discipline line" if what != "append" else "appended the context-discipline line"
+    print(f"CLAUDE.md:     {done}{saved}")
 
 
-def cmd_md_remove(path, line, ts, dry):
+def cmd_md_remove(path, line, old, ts, dry):
     if not os.path.exists(path):
         print("CLAUDE.md:     unchanged, no CLAUDE.md")
         return
-    new, others = md_removed(read_md(path), line)
+    new, others = md_removed(read_md(path), line, old)
     warn = ""
     if others:
         warn = (f"\nCLAUDE.md:     NOTE: {len(others)} other line(s) mention context-discipline and were left alone; "
@@ -614,7 +626,7 @@ skill_uninstall() {
 }
 
 # Check settings.json and CLAUDE.md before touching anything, so a problem stops the run with no change at all.
-helper check "$SETTINGS" "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$SCRIPTS" "$UNINSTALL" "$SKIP_MD" || exit 1
+helper check "$SETTINGS" "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$CLAUDE_MD_OLD" "$SCRIPTS" "$UNINSTALL" "$SKIP_MD" || exit 1
 
 if [ "$DRY" = 1 ]; then
   echo "context-discipline installer: DRY RUN, nothing will be changed"
@@ -630,7 +642,7 @@ if [ "$UNINSTALL" = 1 ]; then
   if [ "$SKIP_MD" = 1 ]; then
     report "CLAUDE.md:     skipped (--skip-claude-md)"
   else
-    out=$(helper md-remove "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$TS" "$DRY") || die "editing CLAUDE.md failed (see above)."
+    out=$(helper md-remove "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$CLAUDE_MD_OLD" "$TS" "$DRY") || die "editing CLAUDE.md failed (see above)."
     report "$out"
   fi
   skill_uninstall "$SRC" "$DEST" "skill:        "
@@ -644,9 +656,14 @@ else
   if [ "$SKIP_MD" = 1 ]; then
     report "CLAUDE.md:     skipped (--skip-claude-md)"
   else
-    out=$(helper md-add "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$TS" "$DRY") || die "editing CLAUDE.md failed (see above)."
+    out=$(helper md-add "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$CLAUDE_MD_OLD" "$TS" "$DRY") || die "editing CLAUDE.md failed (see above)."
     report "$out"
   fi
+  # A version 1 registry of named brains (an earlier version) becomes version 2; nothing is said if there is none.
+  dryflag=""; [ "$DRY" = 1 ] && dryflag=--dry-run
+  out=$(CLAUDE_CONFIG_DIR="$CLAUDE_DIR" bash "$SRC/scripts/brain.sh" --upgrade-registry "$TS" ${dryflag:+"$dryflag"} \
+        < /dev/null 2>&1) || true
+  [ -z "$out" ] || report "brains.json:   $out"
 fi
 
 echo "Summary:"
@@ -660,9 +677,9 @@ elif [ "$UNINSTALL" = 1 ]; then
 Next steps:
   1. Claude Code picks up the change within a few seconds: open /hooks to check the hooks are gone, and
      restart Claude Code only if they are still listed.
-  2. Projects keep their .claude/brain pointer, STATUS.md, overview and .claude/compactions/ logs;
-     delete them in a project if you no longer want them. The registry of named brains
-     ($CLAUDE_DIR/brains.json) and the windows' choices ($CLAUDE_DIR/brain-sessions/) stay too.
+  2. Brains keep their folders (STATUS.md, overview, handoffs, decisions). The registry
+     ($CLAUDE_DIR/brains.json), the windows' choices ($CLAUDE_DIR/brain-sessions/) and the
+     compaction logs ($CLAUDE_DIR/brain-logs/) stay too; delete them if you no longer want them.
 To install again: ./install.sh
 EOF
 else
@@ -670,16 +687,17 @@ else
 Next steps:
   1. Claude Code picks up the new hooks within a few seconds: open /hooks to check the SessionStart,
      PostCompact and UserPromptSubmit hooks are listed, and restart Claude Code only if they are not.
-  2. In each project that will outlive one session, set up its brain:
-       bash "$DEST/scripts/init-brain.sh" <project-root>
-     then fill in STATUS.md and 00-Project-Overview.md and commit them with .claude/brain.
-     Or ask Claude: "set up a project brain for this repo". In brain projects the other two hooks save
-     each compaction summary to .claude/compactions/ (kept out of git) and add a short note when the
-     context reaches 40% of its window and every 15% after.
-  3. Check the SessionStart hook finds it (it prints your STATUS, then a "Project brain loaded from" line):
-       echo '{"cwd": "<project-root>/some/subdir", "source": "startup"}' | bash "$HOOK"
-  4. Several projects in one place? In Claude Code, /brain lists the named brains and picks one for the
-     window (/brain help; README: "Several brains").
+  2. Brains belong to Claude Code sessions, not folders. In a session whose work will outlive it:
+       /brain new <name>    create a brain (in $CLAUDE_DIR/brains/<name>; --at <folder> puts it
+                            elsewhere) and attach it to this window
+       /brain <name>        attach an existing one; /brain lists them (README: "Brains")
+     or start Claude Code with CD_BRAIN=<name>. A session with no brain gets a one-line hint instead.
+     With a brain, the other two hooks save each compaction summary to $CLAUDE_DIR/brain-logs/<name>/
+     and add a short note when the context reaches 40% of its window and every 15% after.
+  3. Check the SessionStart hook loads a brain (it prints its STATUS, then a "(Project brain ..." line):
+       echo '{"source": "startup"}' | CD_BRAIN=<name> bash "$HOOK"
+  4. Used folder pointers (.claude/brain) with an earlier version? The hooks no longer read them: in
+     Claude Code, run /brain add <name> from each folder that has one.
 To update later: git pull && ./install.sh
 EOF
 fi

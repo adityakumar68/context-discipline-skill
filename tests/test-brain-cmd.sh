@@ -384,6 +384,10 @@ bca "$HM/plain" "  help  "
 check "--args: surrounding spaces ignored" has "$out" "usage: /brain"
 bca "$HM/plain" "$(printf 'x%.0s' $(seq 1 5000))"
 check "--args over 4,096 bytes: refused" eval 'has "$out" "brain: " && has "$out" "too long"'
+cp "$REG" "$T/reg.before"
+bca "$HM/plain" "--upgrade-registry 20260101-000000"
+check "--args: the installer's --upgrade-registry is not reachable from /brain" \
+  eval 'has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
 bc "$HM/plain" add sp4 '~/My Proj'
 check "argv form: a folder starting with ~/ is expanded too" reg "b['sp4']['dir'] == '$HM/My Proj'"
 

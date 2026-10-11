@@ -109,8 +109,14 @@ check "fresh: one UserPromptSubmit entry running ctx-nudge.sh, with a 5-second t
 check "fresh: no other hook events or settings keys" jq_ "$C/settings.json" 'list(d) == ["hooks"] and len(d["hooks"]) == 3'
 check "fresh: CLAUDE.md created with the line once" [ "$(md_lines "$C/CLAUDE.md")" = 1 ]
 check "fresh: no backups made (nothing existed)" eval '[ "$(count "$C/*.bak-*")" = 0 ] && [ ! -e "$C/skill-backups" ]'
-check "fresh: summary gives the next steps (/hooks check, init-brain, pipe test)" \
-  eval 'printf "%s" "$out" | grep -q "/hooks" && printf "%s" "$out" | grep -q "init-brain.sh" && printf "%s" "$out" | grep -q "Project brain loaded from"'
+check "fresh: summary gives the next steps (/hooks check, /brain new and /brain <name>, CD_BRAIN pipe test)" \
+  eval 'printf "%s" "$out" | grep -q "/hooks" && printf "%s" "$out" | grep -q "/brain new <name>" && printf "%s" "$out" | grep -q "/brain <name>" && printf "%s" "$out" | grep -qF "CD_BRAIN=<name> bash"'
+check "fresh: summary tells users of old folder pointers to run /brain add <name> from those folders" \
+  eval 'printf "%s" "$out" | grep -qF ".claude/brain" && printf "%s" "$out" | grep -q "/brain add <name>"'
+check "fresh: summary no longer sends anyone to init-brain.sh" eval '! printf "%s" "$out" | grep -q "init-brain"'
+check "fresh: the CLAUDE.md line no longer speaks of a .claude/brain pointer, and names /brain" \
+  eval '! grep -qF ".claude/brain" "$C/CLAUDE.md" && grep -qF "/brain" "$C/CLAUDE.md"'
+check "fresh: no brains.json line (there is no registry to convert)" eval '! printf "%s" "$out" | grep -q "brains.json:"'
 check "fresh: summary does not claim hooks load only at startup" eval '! printf "%s" "$out" | grep -qi "read at startup"'
 
 # --- 2. Whole chain: the installed brain.sh new + the exact hook commands from settings.json -----------------
@@ -541,6 +547,48 @@ check "skills/brain symlink: uninstall leaves it too, with the same wording" \
   eval '[ -L "$C/skills/brain" ] && printf "%s" "$out" | grep -q "brain skill: *unchanged, .*a symlink"'
 out=$(inst "$H33" --help 2>&1)
 check "--help names the /brain skill" eval 'printf "%s" "$out" | grep -q "skills/brain/"'
+
+# --- 19. Upgrading from folder brains: a version 1 registry is converted, the old CLAUDE.md line replaced -------
+OLD_LINE='- For any work that spans many steps or sessions (projects, research surveys, designs, specs, plans, subagent dispatches, reviews), follow the `context-discipline` skill: the main agent coordinates; subagents put deliverables in files and hand back about 15 lines; keep the project brain (STATUS.md, auto-loaded through a `.claude/brain` pointer) current at every decision.'
+H40=$(new_home); C="$H40/.claude"; mkdir -p "$C" "$H40/p/notes"; echo s > "$H40/p/notes/STATUS.md"
+python3 -I -c 'import json, sys
+json.dump({"version": 1, "brains": {"p": {"root": sys.argv[2], "status": sys.argv[2] + "/notes/STATUS.md"},
+           "odd": {"root": 5}}}, open(sys.argv[1], "w"))' "$C/brains.json" "$H40/p"
+cp "$C/brains.json" "$ROOT/v1.json"
+printf '# Rules\n%s\n- Keep answers short.\n' "$OLD_LINE" > "$C/CLAUDE.md"; cp "$C/CLAUDE.md" "$ROOT/old-md.md"
+out=$(inst "$H40" --dry-run 2>&1)
+check "upgrade --dry-run: says it would convert brains.json, changes nothing" \
+  eval 'printf "%s" "$out" | grep -q "brains.json: *would convert" && cmp -s "$C/brains.json" "$ROOT/v1.json" && cmp -s "$C/CLAUDE.md" "$ROOT/old-md.md"'
+out=$(inst "$H40" 2>&1); rc=$?
+check "upgrade: a version 1 brains.json is converted to version 2 (dir = the STATUS file's folder)" \
+  eval '[ "$rc" = 0 ] && python3 -I -c "import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d[\"version\"] == 2 and d[\"brains\"][\"p\"] == {\"dir\": sys.argv[2], \"status\": \"STATUS.md\"} and d[\"brains\"][\"odd\"] == {\"root\": 5} else 1)" "$C/brains.json" "$H40/p/notes"'
+check "upgrade: brains.json backed up first (backup equals the original), the summary says so" \
+  eval 'cmp -s "$C"/brains.json.bak-* "$ROOT/v1.json" && printf "%s" "$out" | grep -q "brains.json: *converted from version 1 to version 2"'
+check "upgrade: the old installer line in CLAUDE.md is replaced by the new one, the rest kept, backup first" \
+  eval '! grep -qF "$OLD_LINE" "$C/CLAUDE.md" && [ "$(md_lines "$C/CLAUDE.md")" = 1 ] && grep -qx -- "- Keep answers short." "$C/CLAUDE.md" && [ "$(sed -n 2p "$C/CLAUDE.md" | grep -c "/brain")" = 1 ] && cmp -s "$C"/CLAUDE.md.bak-* "$ROOT/old-md.md"'
+before=$(tree_sum "$C"); out=$(inst "$H40" 2>&1)
+check "upgrade, second run: nothing changes (no new backups, no brains.json line)" \
+  eval '[ "$before" = "$(tree_sum "$C")" ] && ! printf "%s" "$out" | grep -q "brains.json:"'
+cp "$C/brains.json" "$ROOT/v2.json"
+out=$(inst "$H40" --uninstall 2>&1)
+check "uninstall: brains.json is left as it is" cmp -s "$C/brains.json" "$ROOT/v2.json"
+H41=$(new_home); C="$H41/.claude"; mkdir -p "$C"; printf '# Rules\n%s\n' "$OLD_LINE" > "$C/CLAUDE.md"
+inst "$H41" --uninstall >/dev/null 2>&1
+check "uninstall: the old installer line is removed too" eval '! grep -q context-discipline "$C/CLAUDE.md"'
+H42=$(new_home); C="$H42/.claude"; mkdir -p "$C"; printf '{"version": 1, "brains": ' > "$C/brains.json"
+cp "$C/brains.json" "$ROOT/broken.json"; out=$(inst "$H42" 2>&1); rc=$?
+check "upgrade with a brains.json that cannot be read: installs anyway, leaves it alone, says so" \
+  eval '[ "$rc" = 0 ] && cmp -s "$C/brains.json" "$ROOT/broken.json" && printf "%s" "$out" | grep -q "brains.json: *NOTE" && [ -d "$C/skills/context-discipline" ]'
+H43=$(new_home); C="$H43/.claude"; mkdir -p "$C"; mkfifo "$C/brains.json"
+out=$(env -u CLAUDE_CONFIG_DIR HOME="$H43" perl -e 'alarm shift; exec @ARGV' 60 bash "$INSTALL" 2>&1); rc=$?
+check "upgrade with a brains.json that is a FIFO: no hang, installs anyway" eval '[ "$rc" = 0 ] && [ -p "$C/brains.json" ]'
+H44=$(new_home); CD="$H44/conf dir"; mkdir -p "$CD" "$H44/q"; echo s > "$H44/q/STATUS.md"
+python3 -I -c 'import json, sys
+json.dump({"version": 1, "brains": {"q": {"root": sys.argv[2], "status": sys.argv[2] + "/STATUS.md"}}}, open(sys.argv[1], "w"))' \
+  "$CD/brains.json" "$H44/q"
+env HOME="$H44" CLAUDE_CONFIG_DIR="$CD" bash "$INSTALL" >/dev/null 2>&1
+check "CLAUDE_CONFIG_DIR: the registry there is converted" \
+  python3 -I -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1]))["version"] == 2 else 1)' "$CD/brains.json"
 
 echo "== install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]
