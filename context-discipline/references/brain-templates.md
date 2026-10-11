@@ -120,8 +120,9 @@ Context brief: <path to the context-brief agent's output, if any>
 
 ## Handoff note (`handoffs/YYYY-MM-DD-<sub-project>.md`)
 
-Written before choosing a fresh session at a sub-project boundary. The next session reads STATUS (injected) and this
-note, then the files it points to, and nothing else.
+Written before choosing a fresh session at a sub-project boundary. Put its path as the first item of STATUS's Next
+steps: the next session reads STATUS (injected), follows that link to this note, then the files it points to, and
+nothing else. Older notes stay as history; only the one STATUS links to is current.
 
 ```markdown
 # Handoff — <sub-project> (YYYY-MM-DD)

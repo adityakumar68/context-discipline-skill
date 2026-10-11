@@ -88,12 +88,13 @@ The brain keeps project state across compaction, `/clear`, resume and fork. Comp
 held only in the conversation: the current hypothesis, half-done edits, what was just tried, early instructions.
 Hook text is summarized too, and re-attached skills keep only their first 5,000 tokens (oldest dropped first).
 
-- **Keep it on disk:** STATUS and decisions current; a handoff note before a new sub-task.
+- **Keep it on disk:** STATUS and decisions current; a handoff note before a new sub-task, with its path as the
+  first item of STATUS's Next steps. That link is how the next session finds it; nothing searches for notes by date.
 - **Tell the summary what to keep:** a `# Compact instructions` section in the project-root CLAUDE.md.
 - **Choose the moment:** at a natural break, suggest `/clear` (fresh session from STATUS and the handoff note) or
   `/compact <focus>` to the user. `/autocompact` or the `autoCompactWindow` setting moves the automatic point.
 - **On a context-check note:** finish the current step. At the next natural break update STATUS, write a handoff
-  note if a new sub-task is about to start, then suggest `/clear` or `/compact <focus>`.
+  note if a new sub-task is about to start (linked from STATUS's Next steps), then suggest `/clear` or `/compact <focus>`.
 - **After a compaction:** trust files and `git log` over recollection; `grep -n` the decisions file or plan;
   `.claude/compactions/` holds the summary; re-invoke a skill whose full text you need.
 

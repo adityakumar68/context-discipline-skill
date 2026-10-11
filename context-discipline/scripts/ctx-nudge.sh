@@ -316,7 +316,8 @@ def main():
                 f"Context check (context-discipline): this session's context is at {int(pct)}% of its "
                 f"{window:,}-token window ({ctx:,} tokens).\n"
                 f"Do not stop mid-task. At the next natural break, update {rel}, and write a handoff note if a "
-                f"new sub-task is about to start.\n"
+                f"new sub-task is about to start, putting its path first in the Next steps of {rel} (that link is how "
+                f"the next session finds it).\n"
                 f"Then suggest to the user /clear (a fresh session that starts from {rel} and the handoff) "
                 f"or /compact <focus>."
             )
