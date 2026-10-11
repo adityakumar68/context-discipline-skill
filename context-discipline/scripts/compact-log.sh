@@ -5,8 +5,10 @@
 #   <project root>/.claude/compactions/<YYYY-MM-DD-HHMMSS>-<first 8 characters of the session id>.md
 # so what the compaction kept can be checked, and what it dropped recovered from the transcript.
 #
-# Only in brain projects: the session's cwd must lead up to a .claude/brain pointer that the SessionStart hook
-# would load (same walk-up and containment rules, from brain-lib.sh). Anywhere else it does nothing.
+# Only when the session has a brain, picked as the SessionStart hook picks it (brain-lib.sh): the one chosen with
+# /brain in this window, else CD_BRAIN, else the .claude/brain pointer the session's cwd leads up to. The summary
+# goes to that brain's project, whatever folder the session is in. With no brain ("none", or no pointer) it does
+# nothing.
 # The log folder must be inside the project (a symlink out of it is refused); existing files are never
 # overwritten; files are created readable by their owner only. init-brain.sh adds .claude/compactions/ to the
 # project's .gitignore, because a summary can quote anything the session saw.
@@ -27,7 +29,7 @@ summary=$(cd_json_get "$input" compact_summary 2>/dev/null) || exit 0
 sid=$(cd_json_get "$input" session_id 2>/dev/null) || sid=""
 trigger=$(cd_json_get "$input" trigger 2>/dev/null) || trigger=""
 
-cd_brain_of "$input" >/dev/null 2>&1 || exit 0   # sets CD_ROOT; from here on LC_ALL=C
+cd_select_brain "$input" >/dev/null 2>&1 || exit 0   # sets CD_ROOT; from here on LC_ALL=C
 
 # The log folder: <root>/.claude/compactions, with no symlink on the way that leaves the project.
 claude_dir=$(cd_physical "$CD_ROOT/.claude" 2>/dev/null) || exit 0

@@ -113,6 +113,35 @@ out=$(input "$N" "python path summary" | env -u CLAUDE_PROJECT_DIR PATH="$NOJQ" 
 check "no jq on PATH: python3 reads the input, summary saved" \
   eval '[ $rc = 0 ] && grep -lq "python path summary" "$N/.claude/compactions"/*.md'
 
+# --- named brains: the same choice as the SessionStart hook (brain-lib.sh's cd_select_brain) -----------------------
+# The log goes to the chosen brain's project, whatever folder the session is in.
+NB="$HM/named"; mkdir -p "$NB/.claude" "$HM/inside/.claude" "$HM/inside/src"
+echo s > "$NB/STATUS.md"; echo STATUS.md > "$NB/.claude/brain"
+echo s > "$HM/inside/STATUS.md"; echo STATUS.md > "$HM/inside/.claude/brain"
+python3 -I -c 'import json, sys
+json.dump({"version": 1, "brains": {"nb": {"root": sys.argv[2], "status": sys.argv[2] + "/STATUS.md"}}}, open(sys.argv[1], "w"))' \
+  "$HM/.claude/brains.json" "$NB"
+# runenv <json> [VAR=value...]: run the hook with extra environment. Sets out and rc.
+runenv() { local in="$1"; shift; out=$(printf '%s' "$in" | env -u CLAUDE_PROJECT_DIR HOME="$HM" "$@" bash "$L" 2>&1); rc=$?; }
+runenv "$(input "$HM/inside/src" "named summary")" CD_BRAIN=nb
+check "CD_BRAIN=nb, session inside another brain project: saved in nb's project only" \
+  eval '[ $rc = 0 ] && grep -lq "named summary" "$NB/.claude/compactions"/*.md 2>/dev/null && [ ! -e "$HM/inside/.claude/compactions" ]'
+runenv "$(input "$HM/inside/src" "none summary")" CD_BRAIN=none
+check "CD_BRAIN=none: nothing written, not even in the folder's brain" \
+  eval '[ $rc = 0 ] && [ -z "$out" ] && [ ! -e "$HM/inside/.claude/compactions" ] && ! grep -rq "none summary" "$NB/.claude/compactions" 2>/dev/null'
+runenv "$(input "$HM/inside/src" "unknown summary")" CD_BRAIN=nope
+check "CD_BRAIN names an unregistered brain: exit 0, no output, nothing written" \
+  eval '[ $rc = 0 ] && [ -z "$out" ] && [ ! -e "$HM/inside/.claude/compactions" ] && ! grep -rq "unknown summary" "$NB/.claude/compactions" 2>/dev/null'
+mkdir -p "$HM/.claude/brain-sessions"; printf 'nb\n\n' > "$HM/.claude/brain-sessions/pid-$$"
+runenv "$(input "$HM/plain/x" "window summary")" CLAUDE_PID=$$
+check "/brain nb in this window, session in a plain folder: saved in nb's project" \
+  eval '[ $rc = 0 ] && grep -lq "window summary" "$NB/.claude/compactions"/*.md 2>/dev/null'
+printf 'none\n\n' > "$HM/.claude/brain-sessions/pid-$$"
+runenv "$(input "$HM/inside" "window none")" CLAUDE_PID=$$ CD_BRAIN=nb
+check "/brain none in this window: nothing written, even with CD_BRAIN set" \
+  eval '[ $rc = 0 ] && [ ! -e "$HM/inside/.claude/compactions" ] && ! grep -rq "window none" "$NB/.claude/compactions" 2>/dev/null'
+rm -rf "$HM/.claude/brain-sessions" "$HM/.claude/brains.json"
+
 # CD_HOOKS=off turns all three hooks off (headless runs, benchmarks): nothing is written.
 mkdir -p "$HM/off/.claude"; echo STATUS.md > "$HM/off/.claude/brain"; echo s > "$HM/off/STATUS.md"
 out=$(input "$HM/off" | env -u CLAUDE_PROJECT_DIR CD_HOOKS=off HOME="$HM" bash "$L" 2>&1); rc=$?

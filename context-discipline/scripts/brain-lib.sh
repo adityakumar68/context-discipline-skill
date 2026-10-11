@@ -164,15 +164,6 @@ cd_check_status() {
   return 0
 }
 
-# cd_brain_of <json>: the folder walk-up alone, for a hook's input. True (with CD_ROOT, CD_REL and CD_STATUS set)
-# only if the session's cwd is in a project whose brain pointer is accepted.
-cd_brain_of() {
-  local cwd
-  cwd=$(cd_session_cwd "$1") || return 1
-  cd_find_brain "$cwd" || return 1
-  cd_check_pointer
-}
-
 # --- named brains ---------------------------------------------------------------------------------------------
 
 # cd_config_dir: Claude Code's config folder, where the registry and the windows' choices live.

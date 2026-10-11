@@ -285,6 +285,27 @@ check "CD_HOOKS=off: no output even at 75% in a brain project" quiet
 mkdir -p "$HM/refused/.claude"; echo "$P/docs/STATUS.md" > "$HM/refused/.claude/brain"
 run "$HM/refused" "$TR/x" "sess-$((++k))"
 check "pointer the SessionStart hook refuses: no output" quiet
+
+# --- named brains: the same choice as the SessionStart hook (brain-lib.sh's cd_select_brain) -----------------------
+NB="$HM/named"; mkdir -p "$NB/.claude" "$HM/.claude"; echo s > "$NB/STATUS.md"; echo STATUS.md > "$NB/.claude/brain"
+python3 -I -c 'import json, sys
+json.dump({"version": 1, "brains": {"nb": {"root": sys.argv[2], "status": sys.argv[2] + "/STATUS.md"}}}, open(sys.argv[1], "w"))' \
+  "$HM/.claude/brains.json" "$NB"
+run "$HM/plain/x" "$TR/x" "sess-$((++k))" CD_BRAIN=nb
+check "CD_BRAIN=nb, session in a plain folder: the note names nb's STATUS" \
+  eval 'nudged "75%" && has "$(note)" "update $NB/STATUS.md,"'
+run "$P/src" "$TR/x" "sess-$((++k))" CD_BRAIN=none
+check "CD_BRAIN=none inside a brain project: no output" quiet
+run "$P/src" "$TR/x" "sess-$((++k))" CD_BRAIN=nope
+check "CD_BRAIN names an unregistered brain: no output" quiet
+mkdir -p "$HM/.claude/brain-sessions"; printf 'none\n\n' > "$HM/.claude/brain-sessions/pid-$$"
+run "$P/src" "$TR/x" "sess-$((++k))" CLAUDE_PID=$$ CD_BRAIN=nb
+check "/brain none in this window: no output, even with CD_BRAIN set" quiet
+printf 'nb\n\n' > "$HM/.claude/brain-sessions/pid-$$"
+run "$P/src" "$TR/x" "sess-$((++k))" CLAUDE_PID=$$
+check "/brain nb in this window, inside another brain project: the note names nb's STATUS" \
+  eval 'nudged "75%" && has "$(note)" "update $NB/STATUS.md,"'
+rm -rf "$HM/.claude/brain-sessions" "$HM/.claude/brains.json"
 gen "$TR/g" bad a:80000 bad u cut; run "$P" "$TR/g" "sess-$((++k))"
 check "malformed lines and a truncated last line: the last good call counts" nudged "40%"
 printf '' > "$TR/empty"; run "$P" "$TR/empty" "sess-$((++k))"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ctx-nudge.sh -- UserPromptSubmit hook for the context-discipline skill.
 #
-# In brain projects (same walk-up and containment rules as the SessionStart hook, from brain-lib.sh) it measures
+# When the session has a brain (picked as the SessionStart hook picks it, from brain-lib.sh: /brain in this window,
+# else CD_BRAIN, else the folder walk-up) it measures
 # how full the session's context is and, at 40% of the window and then at every further 15% (55, 70, 85, 100),
 # adds a short note for Claude (hookSpecificOutput.additionalContext): update STATUS at the next natural break,
 # write a handoff note if a new sub-task starts, then suggest /clear or /compact <focus> to the user. Each step
@@ -44,7 +45,7 @@ if [ ! -t 0 ]; then
   input=$(cat 2>/dev/null)
 fi
 [ -n "$input" ] || exit 0
-cd_brain_of "$input" >/dev/null 2>&1 || exit 0   # not a brain project: nothing to do
+cd_select_brain "$input" >/dev/null 2>&1 || exit 0   # no brain for this session: nothing to do
 command -v python3 >/dev/null 2>&1 || exit 0
 
 # The measuring is done in Python (standard library only); its code is read here, so the hook stays one file.
