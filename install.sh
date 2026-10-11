@@ -30,7 +30,8 @@ Installs the context-discipline skill for Claude Code into $CLAUDE_CONFIG_DIR, o
                                                    (10-second timeout)
                   UserPromptSubmit ctx-nudge.sh    every prompt: a short note at 40% of the context
                                                    window and every 15% after (5-second timeout)
-                The last two act only in projects with a brain (.claude/brain).
+                The last two act only when the session has a brain: a .claude/brain above its folder,
+                or one picked by name with /brain or CD_BRAIN.
   4. CLAUDE.md: appends one line telling Claude when to follow the skill
 settings.json and CLAUDE.md are backed up to <file>.bak-<timestamp> before they are changed.
 Steps that are already done are skipped, so running it again is safe. To update: git pull && ./install.sh
@@ -551,6 +552,14 @@ skill_install() {
     fi
     return
   fi
+  if [ "${dest##*/}" = brain ] && [ -L "$dest" ]; then
+    if [ -d "$dest" ] && helper same-tree "$src" "$dest"; then
+      report "$label unchanged, $dest is a symlink to a copy that matches this repo; left as it is"
+    else
+      report "$label NOT installed: $dest is a symlink to something else, left alone; remove it and run again to get /brain"
+    fi
+    return
+  fi
   if [ -d "$dest" ] && helper same-tree "$src" "$dest"; then
     report "$label unchanged, $dest already matches this repo"
     return
@@ -575,6 +584,10 @@ skill_uninstall() {
   local src="$1" dest="$2" label="$3" saved
   if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
     report "$label unchanged, $dest is not there"
+    return
+  fi
+  if [ "${dest##*/}" = brain ] && [ -L "$dest" ]; then
+    report "$label unchanged, $dest is a symlink, left alone; remove the link yourself if you want /brain gone"
     return
   fi
   if foreign "$dest"; then

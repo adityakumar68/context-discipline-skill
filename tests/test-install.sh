@@ -526,6 +526,14 @@ check "another skill named brain: left untouched, the summary says /brain was no
 out=$(inst "$H33" --uninstall 2>&1)
 check "another skill named brain: --uninstall leaves it too" \
   eval '[ "$before" = "$(tree_sum "$C/skills/brain")" ] && printf "%s" "$out" | grep -q "brain skill: *unchanged"'
+# A skills/brain that is a symlink (say, to the repo's brain/) is never replaced or deleted, and both runs say so.
+H34=$(new_home); C="$H34/.claude"; mkdir -p "$C/skills"; ln -s "$REPO/brain" "$C/skills/brain"
+out=$(inst "$H34" 2>&1)
+check "skills/brain is a symlink to this repo's brain/: install leaves it and says it is a symlink" \
+  eval '[ -L "$C/skills/brain" ] && printf "%s" "$out" | grep -q "brain skill: *unchanged, .*a symlink"'
+out=$(inst "$H34" --uninstall 2>&1)
+check "skills/brain symlink: uninstall leaves it too, with the same wording" \
+  eval '[ -L "$C/skills/brain" ] && printf "%s" "$out" | grep -q "brain skill: *unchanged, .*a symlink"'
 out=$(inst "$H33" --help 2>&1)
 check "--help names the /brain skill" eval 'printf "%s" "$out" | grep -q "skills/brain/"'
 

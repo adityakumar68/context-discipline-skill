@@ -23,8 +23,10 @@ All three pick the session's brain with one shared function (`cd_select_brain` i
 
 A name is looked up in `<config>/brains.json`, `{"version": 1, "brains": {"<name>": {"root": "<abs folder>",
 "status": "<abs STATUS path>"}}}`, which `/brain` (`scripts/brain.sh`) writes. The registry is read only if it is a
-regular file of at most 1,000,000 bytes, opened non-blocking (python3 needed). A registered STATUS gets the same
-checks as a pointer's: a regular text file inside its project folder, which may not be `$HOME` or `/`.
+regular file of at most 1,000,000 bytes, opened non-blocking (python3 needed). A registered brain's STATUS is the one
+its root's own `.claude/brain` names when that pointer is accepted (so a project that moves its STATUS is followed),
+else the registered `status`. Either way it gets the same checks as a pointer's: a regular text file inside its
+project folder, which may not be `$HOME` or `/`. `/brain auto` drops a window's choice.
 `none`, or no brain found, means the hooks do nothing (brain-hook.sh prints nothing). All three exit 0 on every path
 and never use the network.
 
@@ -152,7 +154,7 @@ bash "$H/brain.sh"                                                            # 
 | Nothing injected | `grep -n context-discipline/scripts "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"`; does the pipe test print? Is the pointer at `<project>/.claude/brain`, naming an existing file by a relative path? Is the project folder something other than `$HOME` itself (or `/`)? Is `CD_HOOKS=off` set? |
 | `(Project brain not loaded: ...)` | The pointer was refused; the line gives the reason. Use a relative path to a text file inside the project. |
 | Wrong STATUS injected | `/brain` shows which brain this window uses and why: a `/brain` choice beats `CD_BRAIN`, which beats the folder. In the walk-up, the nearest pointer wins: a nested project's `.claude/brain` shadows its parent's. |
-| `(Project brain not loaded: brain "x" ...)` | The chosen name is not registered (renamed or removed?) or its entry is refused; `/brain` lists the registry, `/brain <name>` or `/brain none` picks again. |
+| `(Project brain not loaded: brain "x" ...)` | The chosen name is not registered (renamed or removed?) or its entry is refused; the line says how to fix it. `/brain` lists the registry; `/brain <name>`, `/brain none` or `/brain auto` picks again; `/brain add x <folder>` points a moved project's entry at its new folder. |
 | Trim notice in context | STATUS is over 9,000 characters: move history to the overview's decision log. |
 | STATUS appears twice | An older per-project hook also prints it; remove one. |
 | No context-check note | Not a brain project, the step was already noted this session, no python3, or the window is larger than you think (`CD_CTX_WINDOW` overrides it). |

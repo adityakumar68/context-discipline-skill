@@ -192,17 +192,22 @@ between projects in one window, register the brains by name and pick one:
 /brain                          list the brains: folder, STATUS size and date; * marks the one this window uses
 /brain paper                    use brain "paper" in this window from now on (prints its STATUS)
 /brain none                     use no brain in this window
-/brain add paper [folder]       register the brain of a folder (default: the current one)
+/brain auto                     drop this window's choice: back to CD_BRAIN, else the folder's brain
+/brain add paper [folder]       register the brain of a folder (default: the current one), or update its entry
 /brain new thesis ~/thesis      set up a brain there with init-brain.sh, then register it
 /brain rename paper paper1      registry only
 /brain remove paper1            registry only; the project's files stay
 ```
 
+Arguments are split like shell words, but nothing in them is expanded or run: quote a path with spaces
+(`/brain add p '~/My Proj'` or `~/My\ Proj`); a leading `~` is your home folder.
+
 Which brain a session uses, first match wins:
 
-1. **The choice made with `/brain` in this window.** It holds until you change it, across `/clear` and compactions:
-   it is keyed to the Claude Code process (`$CLAUDE_PID`), not to the session id, which `/clear` replaces. A new
-   window, or `claude --resume` in a new process, starts without one.
+1. **The choice made with `/brain` in this window.** It holds until you change it (`/brain auto` drops it), across
+   `/clear` and compactions: it is keyed to the Claude Code process (`$CLAUDE_PID`), not to the session id, which
+   `/clear` replaces. A new window, or `claude --resume` in a new process, starts without one. Subagents of the
+   window share it.
 2. **`CD_BRAIN=<name>` (or `none`) at launch**, for example `CD_BRAIN=paper claude`.
 3. **The folder walk-up**, as before.
 
@@ -215,18 +220,29 @@ Names are 1 to 32 of `a-z`, `0-9` and `-`. The registry is `~/.claude/brains.jso
 {"version": 1, "brains": {"paper": {"root": "/home/me/code/paper", "status": "/home/me/code/paper/STATUS.md"}}}
 ```
 
-A registered STATUS gets the same checks as a pointer's (a text file inside its project folder, which may not be your
-home folder or `/`) and the same 9,000-character limit. If a chosen brain cannot be loaded (renamed, removed, moved),
-the session starts with one warning line instead of a STATUS. A window's choice is a two-line file in
-`~/.claude/brain-sessions/`: the name, and when its Claude Code process started, so a later process that gets the
-same PID does not inherit it. Choices older than 7 days are pruned when a new one is written, unless their window
-still runs.
+A registered brain loads the STATUS that its project's own `.claude/brain` names, so a project that moves its STATUS
+(say from `phase-a/` to `phase-b/`) needs no re-registering; the registry's `status` is the fallback for a project
+whose pointer is missing or refused. `/brain` notes when the two differ, and `/brain add <name>` updates the entry,
+also after the project folder itself moved. Either way the STATUS gets the same checks as a pointer's (a text file
+inside its project folder, which may not be your home folder or `/`) and the same 9,000-character limit. If a chosen
+brain cannot be loaded (removed, folder gone), the session starts with one warning line that says how to fix it,
+instead of a STATUS. A window's choice is a two-line file in `~/.claude/brain-sessions/`: the name, and when its
+Claude Code process started, so a later process that gets the same PID does not inherit it. Choices older than 7
+days are pruned when a new one is written, unless their window still runs.
 
 `/brain` is a user-invoked skill (Claude does not load it on its own). Its script runs before Claude sees anything,
-through Claude Code's `` !`command` `` skill injection, pre-approved in the skill's `allowed-tools`; Claude only relays
-the result. With `disableSkillShellExecution` set, `/brain` cannot run: use `CD_BRAIN`, or run
-`bash ~/.claude/skills/context-discipline/scripts/brain.sh help` in a terminal (picking a brain for a window still
-has to happen inside Claude Code).
+through Claude Code's `!` command injection, pre-approved in the skill's `allowed-tools`; your arguments reach it as
+one quoted value, and Claude only relays the result. With `disableSkillShellExecution` set, `/brain` cannot run: use
+`CD_BRAIN`, or run `bash ~/.claude/skills/context-discipline/scripts/brain.sh help` in a terminal (picking a brain
+for a window still has to happen inside Claude Code).
+
+**With Claude Code's Bash sandbox on**, the script runs inside the sandbox (seen with 2.1.296; an `excludedCommands`
+entry for it did not take it out). Its `ps` call is blocked there, so a choice is saved without its start time and
+the PID-reuse guard is off; the choice still works. The sandbox lets commands write only to the working folder, temp
+and folders you allow, and protects most of `~/.claude`; writing `brains.json` and `brain-sessions/` there was not
+tested. If `/brain` says `cannot write` or `cannot create`, add `"sandbox": {"filesystem": {"allowWrite":
+["~/.claude"]}}` to your settings (the sandbox keeps its protected files there protected; use your
+`$CLAUDE_CONFIG_DIR` if set), or pick brains with `CD_BRAIN=<name>` at launch.
 
 ## Day-to-day use
 
@@ -356,8 +372,9 @@ prompts replace this skill's briefs; this skill adds the hand-back contract and 
 
 **Do the hooks write files or use the network?** None uses the network. `brain-hook.sh` only reads. `compact-log.sh`
 writes one owner-only file per compaction to `.claude/compactions/`, in brain projects only. `ctx-nudge.sh` keeps one
-small state file per session in `${TMPDIR:-/tmp}/context-discipline/`. All three always exit 0. `/brain` writes only
-the registry and its choice files in `~/.claude`. `brain-hook.sh`
+small state file per session in `${TMPDIR:-/tmp}/context-discipline/`. All three always exit 0. `/brain` writes the
+registry and its choice files in `~/.claude`; `/brain new` also runs `init-brain.sh`, which creates the brain's files
+in the project. `brain-hook.sh`
 takes about 30 ms; `ctx-nudge.sh` about 60 ms on a 60 MB transcript and about 12 ms outside brain projects.
 
 **Is a cloned repo's STATUS trusted?** It gets the same trust as the repo's own CLAUDE.md: a repo that ships a
