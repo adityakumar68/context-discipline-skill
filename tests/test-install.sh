@@ -6,6 +6,7 @@
 # Prints PASS/FAIL per check and a total; exits non-zero if anything failed.
 
 set -u
+unset CD_BRAIN CD_HOOKS CLAUDE_PID CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR   # no brain choice from the calling window
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 INSTALL="$REPO/install.sh"
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/cd-tests.XXXXXX") && [ -d "$ROOT" ] || { echo "mktemp failed" >&2; exit 1; }

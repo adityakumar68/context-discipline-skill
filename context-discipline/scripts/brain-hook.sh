@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # brain-hook.sh -- SessionStart hook for the context-discipline skill.
 #
-# Reads the hook's JSON from stdin, takes its "cwd", walks up from there looking
-# for a "<dir>/.claude/brain" pointer file, and prints the STATUS file it names so
-# Claude Code adds it to context at every session start (startup, resume, clear,
-# compact, fork).
+# Reads the hook's JSON from stdin and prints the STATUS file of the session's
+# project brain, so Claude Code adds it to context at every session start
+# (startup, resume, clear, compact, fork). The brain is, first match wins: the
+# one chosen with /brain in this Claude Code window, else CD_BRAIN=<name> (both
+# looked up in <config>/brains.json; "none" means no brain), else the folder
+# brain found by walking up from the input's "cwd" to a "<dir>/.claude/brain"
+# pointer file (brain-lib.sh has the rules).
 #
 # Pointer format: the first non-empty line not starting with "#" is the STATUS
 # path, relative to <dir> (only the first 4,096 bytes are read; the line may be
@@ -13,18 +16,19 @@
 # escapes and symlinks that leave <dir> are refused, because the hook runs in
 # every session and a downloaded repo could otherwise point it at any file.
 #
-# Contract: prints nothing and exits 0 when no pointer is found or the input is
-# not a JSON object. When a pointer
-# is found but refused, prints one warning line naming it (no file content) and
-# exits 0. Never writes files, never touches the network.
+# Contract: prints nothing and exits 0 when there is no brain (no pointer found,
+# or "none" chosen) or the input is not a JSON object. When a pointer or a named
+# brain is found but refused, prints one warning line naming it (no file
+# content) and exits 0. Never writes files, never touches the network.
 # Stops before $HOME and "/" so ~/.claude (global config) is never read as a brain.
 
 LIMIT=9000   # characters of STATUS printed in full; longer files are cut to this many, with a notice
 CAP=10000    # Claude Code replaces hook output over 10,000 characters with a 2,000-character preview
 
-# 1-3. Find the session's brain: walk up from its cwd to the nearest <dir>/.claude/brain (stopping before
-#      $HOME and "/") and accept the STATUS file it names only if it is a text file inside <dir>. The rules live
-#      in brain-lib.sh, shared with the other context-discipline hooks so they all agree on what a brain is.
+# 1-3. Find the session's brain: the one chosen with /brain in this window, else CD_BRAIN, else the walk-up from
+#      its cwd to the nearest <dir>/.claude/brain (stopping before $HOME and "/"); accept the STATUS file only if
+#      it is a text file inside its project folder. The rules live in brain-lib.sh, shared with the other
+#      context-discipline hooks and the /brain command so they all agree on which brain a session uses.
 here="${BASH_SOURCE[0]%/*}"; [ "$here" = "${BASH_SOURCE[0]}" ] && here=.
 . "$here/brain-lib.sh" 2>/dev/null || exit 0
 
@@ -34,22 +38,22 @@ if [ ! -t 0 ]; then
 fi
 # Input that is not a JSON object stops the hook (Claude Code always sends one). Valid JSON without "cwd",
 # or no JSON parser at all, falls back to $CLAUDE_PROJECT_DIR, then $PWD.
-cwd=$(cd_session_cwd "$input") || exit 0
-cd_find_brain "$cwd" || exit 0
-pointer="$CD_POINTER"
-
-cd_check_pointer   # from here on LC_ALL=C: count and match bytes
+cd_select_brain "$input"   # from here on LC_ALL=C: count and match bytes
 case $? in
   0) ;;
-  1) printf '(Project brain not loaded: %s %s.)\n' "$pointer" "$CD_REFUSED"; exit 0 ;;
-  *) exit 0 ;;
+  1) printf '(Project brain not loaded: %s %s.)\n' "$CD_SUBJECT" "$CD_REFUSED"; exit 0 ;;
+  *) exit 0 ;;   # no brain, or "none" chosen
 esac
 status="$CD_STATUS"; size="$CD_SIZE"
 
 # 4. Print it (cut on a character boundary if too long), then one line naming the source.
 # Characters are counted as Claude Code counts them: JavaScript string length, so most characters are 1
 # and emoji (4-byte UTF-8) are 2. Bytes are never fewer, so a file of at most $budget bytes always fits.
-loaded="(Project brain loaded from $status. Working rules: context-discipline skill.)"
+if [ -n "$CD_NAME" ]; then
+  loaded="(Project brain loaded from $status (brain \"$CD_NAME\", chosen with $CD_HOW). Working rules: context-discipline skill.)"
+else
+  loaded="(Project brain loaded from $status. Working rules: context-discipline skill.)"
+fi
 name=$(basename -- "$status" 2>/dev/null) || name=""
 # 200: room for the trim notice's fixed text and numbers, plus the file name it gives; ${#...} counts bytes
 # (>= characters)

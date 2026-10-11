@@ -7,6 +7,7 @@
 # written.
 
 set -u
+unset CD_BRAIN CD_HOOKS CLAUDE_PID CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR   # no brain choice from the calling window
 S=$(cd "$(dirname "$0")/../context-discipline/scripts" && pwd -P)
 N="$S/ctx-nudge.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/cd-tests.XXXXXX") && [ -d "$T" ] || { echo "mktemp failed" >&2; exit 1; }
