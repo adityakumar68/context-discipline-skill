@@ -278,7 +278,7 @@ check "no python3, no choice: the hint, without names" eval 'nobrain "$out" && h
 rm -rf "$CFG/brain-sessions"
 hook "$HM/plain" CD_BRAIN=b CLAUDE_PID=$$
 check "a STATUS printed: <config>/brain-sessions/seen-pid-<pid> holds its path, mtime and size; folder private" \
-  eval '[ "$(head -n 1 "$CFG/brain-sessions/seen-pid-$$")" = "$HM/b/notes/STATUS.md" ] && [ "$(sed -n 2p "$CFG/brain-sessions/seen-pid-$$" | wc -w | tr -d " ")" = 2 ] && [ "$(ls -ld "$CFG/brain-sessions" | cut -c1-10)" = drwx------ ]'
+  eval '[ "$(head -n 1 "$CFG/brain-sessions/seen-pid-$$")" = "$HM/b/notes/STATUS.md" ] && [ "$(sed -n 2p "$CFG/brain-sessions/seen-pid-$$")" = "$(python3 -I -c "import os, sys; s = os.stat(sys.argv[1]); print(s.st_mtime_ns, s.st_size, s.st_ino)" "$HM/b/notes/STATUS.md")" ] && [ "$(ls -ld "$CFG/brain-sessions" | cut -c1-10)" = drwx------ ]'
 hook "$HM/plain" CD_BRAIN=b
 check "no CLAUDE_PID: the record is keyed by the session id" eval '[ -f "$CFG/brain-sessions/seen-sid-sess-1" ]'
 rm -rf "$CFG/brain-sessions"

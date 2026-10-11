@@ -35,7 +35,7 @@
 # the hook stays silent rather than repeat itself).
 #
 # STATUS changed under this window: several windows may share a brain. The SessionStart hook records, per window,
-# the STATUS it printed and its mtime and size (<config>/brain-sessions/seen-<window key>). At each prompt this hook
+# the STATUS it printed and its mtime (ns), size and inode (<config>/brain-sessions/seen-<window key>). At each prompt this hook
 # stats STATUS once; if it changed since, it adds one note (re-read it before relying on it or editing it) and
 # records the new mtime, so the note comes once per change. A change made by this session's own main-thread Edit,
 # Write, MultiEdit, NotebookEdit or Bash call that names the STATUS path (also as ~/...) since the previous prompt is
@@ -317,7 +317,8 @@ def write_seen(path, status, mark):
 
 
 def stale_check(status, seen):
-    """(changed, mark): whether STATUS changed since this window last read it, and the "<mtime> <size>" to record
+    """(changed, mark): whether STATUS changed since this window last read it, and the "<mtime ns> <size> <inode>" to
+    record
     (None: record nothing, as when the record is not a regular file or STATUS cannot be measured)."""
     if not status or not seen:
         return False, None
@@ -325,7 +326,7 @@ def stale_check(status, seen):
         st = os.stat(status)
     except OSError:
         return False, None
-    mark = f"{int(st.st_mtime)} {st.st_size}"
+    mark = f"{st.st_mtime_ns} {st.st_size} {st.st_ino}"   # as brain-hook.sh records it
     old = read_small(seen)
     if old is None:
         return False, None

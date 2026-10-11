@@ -36,7 +36,7 @@ every symlink resolved, it is a regular text file inside `dir`, which may not be
 - With a brain: the STATUS file is printed as plain stdout, which Claude Code adds to context for `SessionStart`,
   followed by one line: `(Project brain loaded from <path> (brain "<name>", chosen with /brain). For this work's
   current state it overrides older notes in memory; rules in CLAUDE.md still apply. Working rules: ...)` (or
-  `chosen with CD_BRAIN`). It then records, for this window, which STATUS it showed and its mtime and size
+  `chosen with CD_BRAIN`). It then records, for this window, which STATUS it showed and its mtime (in ns), size and inode
   (`<config>/brain-sessions/seen-<window key>`), for the UserPromptSubmit hook.
 - No brain (except on `compact`, and except when the user chose none with `/brain none` or `CD_BRAIN=none`): one
   line, `No brain attached. Brains: a, b. Type /brain <name> to attach one.` When a window whose session ran in this

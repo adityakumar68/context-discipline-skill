@@ -369,8 +369,8 @@ start_hook() { printf '{"session_id": "w1", "source": "%s"}' "${1:-startup}" | e
 later() { python3 -I -c 'import os, sys; t = os.stat(sys.argv[1]).st_mtime + int(sys.argv[2]); os.utime(sys.argv[1], (t, t))' "$ST" "${1:-10}"; }
 stale() { has "$(note)" "was updated since this session last read it"; }
 start_hook
-check "SessionStart with a brain: records the STATUS it printed for this window (path, mtime, size)" \
-  eval '[ "$(head -n 1 "$SEEN")" = "$ST" ] && [ "$(sed -n 2p "$SEEN")" = "$(python3 -I -c "import os, sys; s = os.stat(sys.argv[1]); print(int(s.st_mtime), s.st_size)" "$ST")" ]'
+check "SessionStart with a brain: records the STATUS it printed for this window (path; mtime in ns, size, inode)" \
+  eval '[ "$(head -n 1 "$SEEN")" = "$ST" ] && [ "$(sed -n 2p "$SEEN")" = "$(python3 -I -c "import os, sys; s = os.stat(sys.argv[1]); print(s.st_mtime_ns, s.st_size, s.st_ino)" "$ST")" ]'
 gen "$TR/s" a:1000; W="sess-$((++k))"
 run "$P" "$TR/s" "$W" CLAUDE_PID=$$
 check "STATUS unchanged since it was loaded: no note" quiet
@@ -394,6 +394,19 @@ gen "$TR/s" a:1000 u "e:$ST" u "bash:$ST" u "se:$ST" u "e:$P/docs/OTHER.md"; lat
 check "an own Edit of another file does not hide the change: noted" stale
 later 70; run "$P" - "$W" CLAUDE_PID=$$
 check "no transcript_path in the input: the change is still noted" stale
+# Same size, within the same second: still a change (mtime in ns), and a same-size file put in place with the very
+# same mtime is a change too (a new inode).
+python3 -I -c 'import os, sys
+p = sys.argv[1]; st = os.stat(p); t = open(p).read(); i = t.rindex("e")
+open(p, "w").write(t[:i] + "E" + t[i + 1:]); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1))' "$ST"
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "a same-size change 1 ns later (same second): noted" stale
+python3 -I -c 'import os, sys
+p = sys.argv[1]; st = os.stat(p); t = open(p).read(); i = t.rindex("E")
+open(p + ".new", "w").write(t[:i] + "e" + t[i + 1:]); os.utime(p + ".new", ns=(st.st_atime_ns, st.st_mtime_ns))
+os.replace(p + ".new", p)' "$ST"
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "a same-size file put in place with the same mtime (another inode): noted" stale
 # Only tools that can write count as the session's own change; reading STATUS (as the note itself asks) never hides
 # another session's change.
 T7="$TR/s7"; W7="sess-$((++k))"; gen "$T7" a:1000; run "$P" "$T7" "$W7" CLAUDE_PID=$$
