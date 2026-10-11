@@ -1,10 +1,14 @@
 # Brain templates
 
-Copy-ready templates for the files a long project keeps outside the agent's context.
-`${CLAUDE_SKILL_DIR}/scripts/init-brain.sh` (`${CLAUDE_SKILL_DIR}` is this skill's folder) copies the STATUS and
-overview templates below (the fenced blocks after the `template:` markers) and fills `{{PROJECT}}` and `{{DATE}}`;
-edit the blocks and the script uses the new version. It also writes the `.claude/brain` pointer and adds
-`.claude/compactions/` to the project's `.gitignore`.
+Copy-ready templates for the files a long project keeps outside the agent's context. They live in the brain's
+folder (`~/.claude/brains/<name>/`, or the folder given to `/brain new <name> --at <folder>`): `STATUS.md`,
+`00-Project-Overview.md`, `decisions/` and `handoffs/`. A brain belongs to a session, not to a folder, so the session
+may run anywhere: inside the brain, link the brain's own files by paths relative to its folder and project files
+(code, data, specs) by absolute path.
+`/brain new` runs `${CLAUDE_SKILL_DIR}/scripts/init-brain.sh <brain-folder> <name>` (`${CLAUDE_SKILL_DIR}` is this
+skill's folder), which copies the STATUS and overview templates below (the fenced blocks after the `template:`
+markers) and fills `{{PROJECT}}` (the brain's name) and `{{DATE}}`; edit the blocks and the script uses the new
+version. It writes nothing else: no pointer, no `.gitignore` line.
 
 Contents: STATUS.md · overview doc · decisions file · handoff note · Compact instructions · memory file · what goes
 where.
@@ -14,13 +18,15 @@ where.
 The current state, injected into context on every startup, resume, `/clear`, compaction and fork. Keep it under
 9,000 characters (`wc -m STATUS.md`): the hook shows only the first 9,000 characters of a longer file, then a trim
 notice. Rewrite sections in place instead of appending; history belongs in the overview's decision log and in git.
-Write it as facts ("Run 3 is on GPU 2"), not as orders to the model.
+Write it as facts ("Run 3 is on GPU 2"), not as orders to the model. Several sessions may share a brain: re-read
+STATUS right before editing it and change only the sections your work owns.
 
 <!-- template:status -->
 ~~~markdown
 # {{PROJECT}} — STATUS
 
-_Last updated: {{DATE}}. Rewrite in place; keep under 9,000 characters (`wc -m`)._
+_Last updated: {{DATE}}. Rewrite in place; keep under 9,000 characters (`wc -m`). Other sessions may share this
+brain: re-read it right before editing, change only the sections you own._
 
 ## Pitch
 One or two sentences: what this project makes and why it matters.
@@ -42,9 +48,11 @@ One or two sentences: what this project makes and why it matters.
 2.
 
 ## Key files
+(The brain's own files relative to this folder; project files by absolute path.)
 - Big picture, decision log: `00-Project-Overview.md`
-- Current decisions file: (path)
-- Current spec / plan: (path)
+- Project folder(s): (absolute path)
+- Current decisions file: `decisions/(YYYY-MM-DD-HHMM-topic).md`
+- Current spec / plan: (absolute path)
 
 ## Expensive results and their backups
 - (result, e.g. trained checkpoint or dataset build) — (path) — backup: (path or "none yet")
@@ -97,10 +105,11 @@ Machines, GPUs, quotas, accounts (names only; secrets stay in env vars or a pass
 ~~~
 <!-- end:overview -->
 
-## Decisions file (`decisions/YYYY-MM-DD-<topic>.md`)
+## Decisions file (`decisions/YYYY-MM-DD-HHMM-<topic>.md`, in the brain's folder)
 
 Written during design, one entry appended the moment the user answers, so nothing depends on the conversation
-surviving compaction. The spec drafter reads this file instead of the session history.
+surviving compaction. The spec drafter reads this file instead of the session history. The time in the name keeps
+two sessions that share the brain from writing the same file.
 
 ```markdown
 # Decisions — <topic> (started YYYY-MM-DD)
@@ -118,11 +127,12 @@ Context brief: <path to the context-brief agent's output, if any>
 - <questions not yet asked>
 ```
 
-## Handoff note (`handoffs/YYYY-MM-DD-<sub-project>.md`)
+## Handoff note (`handoffs/YYYY-MM-DD-HHMM-<sub-project>.md`, in the brain's folder)
 
 Written before choosing a fresh session at a sub-project boundary. Put its path as the first item of STATUS's Next
 steps: the next session reads STATUS (injected), follows that link to this note, then the files it points to, and
-nothing else. Older notes stay as history; only the one STATUS links to is current.
+nothing else. Older notes stay as history; only the one STATUS links to is current. The time in the name keeps the
+notes of sessions sharing the brain apart.
 
 ```markdown
 # Handoff — <sub-project> (YYYY-MM-DD)
@@ -165,7 +175,9 @@ When summarizing this conversation, keep:
 ## Memory file
 
 Memory holds facts that are true across sessions and cannot be derived from the repo: who the user is, feedback with
-its reason, project facts, pointers. One fact per file, plus a one-line entry in the memory index.
+its reason, pointers. While a brain is attached, facts about the project go to the brain (its overview or STATUS),
+not to memory: memory is per folder, a brain follows the session. One fact per file, plus a one-line entry in the
+memory index.
 
 ```markdown
 ---
@@ -184,7 +196,9 @@ arrives longer than ~15 lines, ask for the file path instead of reading on.
 ```
 
 Memory types: `user` (role, goals, preferences), `feedback` (a correction or confirmed approach, with **Why:** and
-**How to apply:**), `project` (facts about the work not visible in the repo), `reference` (where something lives).
+**How to apply:**), `project` (facts about the work not visible in the repo; with a brain attached they go to the
+brain instead), `reference` (where something lives). For the work's current state, the brain's STATUS overrides
+older notes in memory.
 
 ## What goes where
 
@@ -194,11 +208,12 @@ Each home has one job; information in the wrong one either bloats every session 
 |---|---|---|
 | Global `~/.claude/CLAUDE.md` | Stable cross-project rules, a few lines, pointers to skills | Project detail, procedures |
 | Project `CLAUDE.md` / `AGENTS.md` | Project rules, build and test commands, conventions, Compact instructions | Current state, history |
-| Memory files | Facts about the user; feedback with its **Why**; project facts not derivable from the repo; pointers | Procedures; state that changes daily |
-| `STATUS.md` | Current state, under 9,000 characters, injected each session | History |
-| Overview doc | Big picture, dated decision log, metrics, where everything lives | Today's to-do list |
+| Memory files | Facts about the user; feedback with its **Why**; pointers | Project facts while a brain is attached (they go to the brain); procedures; state that changes daily |
+| `STATUS.md` (brain) | Current state, under 9,000 characters, injected each session | History |
+| Overview doc (brain) | Big picture and project facts, dated decision log, metrics, where everything lives | Today's to-do list |
+| Brain's `decisions/`, `handoffs/` | Decisions files and handoff notes, named with date and time | Secrets |
 | Skills | Procedures reused across projects | Project facts |
-| Project files | Specs, plans, decisions files, notes, handoffs, agent outputs and reviews | Secrets |
+| Project files | Specs, plans, notes, agent outputs and reviews | Secrets |
 
 Secrets go in none of these: every one is read into context or committed. Read them at run time from an env var, an
 askpass helper or a password manager.
