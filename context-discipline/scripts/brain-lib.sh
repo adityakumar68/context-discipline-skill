@@ -333,20 +333,42 @@ cd_registry_get() {
   return 1
 }
 
-# cd_check_named <root> <status>: accept a registered brain: <root> an existing project folder (absolute, not
-# $HOME or "/"), <status> an absolute path that cd_check_status accepts. Sets what cd_check_status sets, and
-# CD_ROOT. Returns 1 with CD_REFUSED set if it is refused, 2 if the STATUS cannot be measured.
+# cd_check_named <root> <status> [name]: accept a registered brain. <root> must be an existing project folder
+# (absolute, not $HOME or "/"). Its STATUS is the one its own <root>/.claude/brain names when that pointer exists
+# and is accepted, so a project that moves its STATUS on is followed; otherwise the registered <status>, an
+# absolute path that cd_check_status accepts. Sets what cd_check_status sets, CD_ROOT, and CD_NOTE: "" or why the
+# registered STATUS is not the one used (for /brain to show; [name] goes into its advice).
+# Returns 1 with CD_REFUSED set if it is refused, 2 if the STATUS cannot be measured.
 cd_check_named() {
-  local home
+  local home name="${3:-<name>}" ptr_problem="" reg="" rc
+  CD_NOTE=""
   case "$1" in /*) ;; *) CD_REFUSED="must name its project folder by an absolute path"; return 1 ;; esac
-  case "$2" in /*) ;; *) CD_REFUSED="must name its STATUS file by an absolute path"; return 1 ;; esac
-  CD_ROOT=$(cd -P -- "$1" 2>/dev/null && pwd -P) || { CD_ROOT=""; CD_REFUSED="names a missing project folder"; return 1; }
+  CD_ROOT=$(cd -P -- "$1" 2>/dev/null && pwd -P) || {
+    CD_ROOT=""
+    CD_REFUSED="names a missing project folder ($1); if it moved, /brain add $name <folder> points it at the new one"
+    return 1
+  }
   home=$(cd -P -- "${HOME:-/}" 2>/dev/null && pwd -P) || home="${HOME%/}"
   if [ "$CD_ROOT" = / ] || [ "$CD_ROOT" = "$home" ]; then
     CD_REFUSED="names your home folder or / as its project folder (~/.claude there is Claude Code's config)"
     CD_ROOT=""; return 1
   fi
-  cd_check_status "$2"
+  case "$2" in /*) reg=$(cd_physical "$2" 2>/dev/null) || reg="$2" ;; esac
+  if [ -f "$CD_ROOT/.claude/brain" ]; then
+    CD_POINTER="$CD_ROOT/.claude/brain"
+    cd_check_pointer; rc=$?
+    if [ "$rc" = 0 ]; then
+      [ "$CD_STATUS" = "$reg" ] || \
+        CD_NOTE="its .claude/brain now names $CD_REL; the registry still says $2 (/brain add $name updates it)"
+      return 0
+    fi
+    [ "$rc" = 1 ] && ptr_problem="$CD_POINTER $CD_REFUSED"
+    CD_POINTER=""
+  fi
+  [ -n "$reg" ] || { CD_REFUSED="must name its STATUS file by an absolute path"; return 1; }
+  cd_check_status "$2" || return $?
+  [ -n "$ptr_problem" ] && CD_NOTE="$ptr_problem, so the registered STATUS is used"
+  return 0
 }
 
 # cd_select_brain <json>: which brain this session uses (the rules at the top of this file), for a hook's input
@@ -359,6 +381,7 @@ cd_check_named() {
 cd_select_brain() {
   local cwd key name
   CD_HOW=""; CD_NAME=""; CD_SUBJECT=""; CD_REFUSED=""; CD_ROOT=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""; CD_POINTER=""
+  CD_NOTE=""
   [ "${CD_HOOKS:-}" = off ] && return 2
   cwd=$(cd_session_cwd "$1") || return 2
   LC_ALL=C; export LC_ALL
@@ -382,5 +405,5 @@ cd_select_brain() {
   fi
   CD_SUBJECT="brain \"$name\" (chosen with $CD_HOW)"
   cd_registry_get "$name" || return 1
-  cd_check_named "$CD_REG_ROOT" "$CD_REG_STATUS"
+  cd_check_named "$CD_REG_ROOT" "$CD_REG_STATUS" "$name"
 }

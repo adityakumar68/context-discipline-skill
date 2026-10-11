@@ -148,6 +148,23 @@ registry "$REG" c "$HM/c" "$HM/c/STATUS.md"; hook "$HM/plain" CD_BRAIN=c
 check "registered brain with a 12,000-char STATUS: cut to 9,000 with the usual notice" \
   has "$out" "[STATUS.md is 12,000 characters, over the 9,000 limit, so only the first 9,000 are shown here."
 
+# --- a registered brain follows its project's own pointer; the registered STATUS is the fallback ------------------
+mkdir -p "$HM/mv/.claude" "$HM/mv/phase-a" "$HM/mv/phase-b"
+printf 'status-of-mv-old\n' > "$HM/mv/phase-a/STATUS.md"; printf 'status-of-mv-new\n' > "$HM/mv/phase-b/STATUS.md"
+echo phase-b/STATUS.md > "$HM/mv/.claude/brain"
+registry "$REG" mv "$HM/mv" "$HM/mv/phase-a/STATUS.md"
+hook "$HM/plain" CD_BRAIN=mv
+check "pointer moved on since registering: the hook loads the pointer's STATUS, not the registered one" \
+  eval 'has "$out" status-of-mv-new && ! has "$out" status-of-mv-old && has "$out" "loaded from $HM/mv/phase-b/STATUS.md (brain \"mv\""'
+echo missing.md > "$HM/mv/.claude/brain"; hook "$HM/plain" CD_BRAIN=mv
+check "pointer naming a missing file: the registered STATUS is the fallback" has "$out" status-of-mv-old
+echo "$HM/mv/phase-b/STATUS.md" > "$HM/mv/.claude/brain"; hook "$HM/plain" CD_BRAIN=mv
+check "pointer the hooks refuse (absolute path): the registered STATUS is the fallback" has "$out" status-of-mv-old
+rm "$HM/mv/.claude/brain"; hook "$HM/plain" CD_BRAIN=mv
+check "no pointer at the root: the registered STATUS" has "$out" status-of-mv-old
+echo ../a/STATUS.md > "$HM/mv/.claude/brain"; rm "$HM/mv/phase-a/STATUS.md"; hook "$HM/plain" CD_BRAIN=mv
+check "pointer refused and registered STATUS missing: one warning line" refused "$out" 'brain "mv"'
+
 # --- the registry itself ------------------------------------------------------------------------------------------
 regcheck() {   # regcheck <description>: CD_BRAIN=a must give one warning naming the registry, quickly
   local t0 ms; t0=$(python3 -I -c 'import time; print(time.time())')

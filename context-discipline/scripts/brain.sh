@@ -45,7 +45,8 @@ EOF
 }
 
 # The registry's write commands, added to the lib's reader (CD_REGISTRY_PY). Exit codes: 0 done, 3 no such name,
-# 4 registry unusable (message printed), 5 already registered the same way, 6 name in use (its root printed).
+# 4 registry unusable (message printed), 5 already registered the same way, 6 name in use (its root printed),
+# 7 entry updated (prints what changed: "status<TAB>old", "root<TAB>old" or "entry<TAB>").
 IFS= read -r -d '' BRAIN_PY <<'PY' || true
 import tempfile
 
@@ -81,15 +82,29 @@ def write(path, reg):
 
 
 def cmd_set(path, name, root, status):
+    """Register <name>. An existing entry is updated if it is for the same project folder, if its folder no longer
+    exists (the project moved), or if it is unusable; any other existing entry is left alone (6)."""
     reg = load(path)
     old = reg["brains"].get(name)
     if old == {"root": root, "status": status}:
         return 5
-    if old is not None:
-        print(old.get("root") if isinstance(old, dict) and isinstance(old.get("root"), str) else "another entry")
-        return 6
+    change = None
+    if name in reg["brains"]:
+        e = entry(reg["brains"], name)
+        if e is None:
+            change = "entry\t"
+        elif os.path.isdir(e[0]) and os.path.realpath(e[0]) == os.path.realpath(root):
+            change = "status\t" + e[1]
+        elif not os.path.isdir(e[0]):
+            change = "root\t" + e[0]
+        else:
+            print(e[0])
+            return 6
     reg["brains"][name] = {"root": root, "status": status}
     write(path, reg)
+    if change:
+        print(change)
+        return 7
     return 0
 
 
@@ -204,7 +219,7 @@ pick() {
       say_err "brain \"$name\" $CD_REFUSED.${known:+ Registered: $known.} Nothing changed."; return
     fi
     LC_ALL=C; export LC_ALL
-    if ! cd_check_named "$CD_REG_ROOT" "$CD_REG_STATUS"; then
+    if ! cd_check_named "$CD_REG_ROOT" "$CD_REG_STATUS" "$name"; then
       say_err "brain \"$name\" ${CD_REFUSED:-cannot be read}, so the hooks would not load it. Nothing changed."; return
     fi
   fi
@@ -217,6 +232,7 @@ pick() {
   printf 'This window now uses brain "%s" (%s). The hooks load it at every start, /clear and compaction in this\n' \
     "$name" "$CD_STATUS"
   printf 'window. It replaces any project STATUS loaded earlier in this session; here it is:\n\n'
+  [ -n "${CD_NOTE:-}" ] && printf 'Note: brain "%s": %s.\n\n' "$name" "$CD_NOTE"
   if [ "${CD_HOOKS:-}" = off ]; then
     echo "(CD_HOOKS=off is set in this window, so the hooks are off and will not load it.)"
   fi
@@ -231,6 +247,12 @@ register() {
   case $rc in
     0) printf 'Registered brain "%s": %s (STATUS: %s).\nUse it in this window: /brain %s\n' "$1" "$2" "$3" "$1" ;;
     5) printf 'Brain "%s" is already registered for %s. Use it in this window: /brain %s\n' "$1" "$2" "$1" ;;
+    7) case "$out" in
+         status$'\t'*) printf 'Updated brain "%s": its STATUS is now %s (was %s).\n' "$1" "$3" "${out#*$'\t'}" ;;
+         root$'\t'*) printf 'Updated brain "%s": its project folder is now %s (was %s, which no longer exists).\n' \
+                        "$1" "$2" "${out#*$'\t'}" ;;
+         *) printf 'Updated brain "%s": it now points to %s, in place of an entry /brain could not use.\n' "$1" "$2" ;;
+       esac ;;
     6) say_err "the name \"$1\" is already used for $out; pick another name (or /brain rename or /brain remove it first)." ;;
     *) say_err "${out:-cannot write $REG}" ;;
   esac
@@ -334,7 +356,7 @@ list() {
     while IFS=$'\t' read -r name root status; do [ ${#name} -gt $width ] && width=${#name}; done <<<"$rows"
     while IFS=$'\t' read -r name root status; do
       mark=" "
-      if cd_check_named "$root" "$status"; then
+      if cd_check_named "$root" "$status" "$name"; then
         info="$CD_REL, $(commas "$CD_SIZE") bytes, changed $(date -r "$CD_STATUS" +%Y-%m-%d 2>/dev/null)"
         roots="$roots"$'\n'"$CD_ROOT"
         if [ "$sel" = 0 ] && { [ "$s_name" = "$name" ] || { [ "$s_how" = folder ] && [ "$s_status" = "$CD_STATUS" ]; }; }; then
@@ -344,6 +366,7 @@ list() {
         info="not usable: ${CD_REFUSED:-cannot be read}"
       fi
       printf '%s %-*s  %s  %s\n' "$mark" "$width" "$name" "$(cd_printable "$root" 4096)" "$info"
+      [ -n "${CD_NOTE:-}" ] && printf '  %-*s  note: %s\n' "$width" "" "$(cd_printable "$CD_NOTE" 8192)"
     done <<<"$rows"
   fi
 

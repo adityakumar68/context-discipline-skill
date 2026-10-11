@@ -240,6 +240,39 @@ check "new in the home folder: init-brain refuses, nothing registered" eval '! r
 bc "$HM/plain" new fresh3
 check "new without a folder: usage" eval '[ $rc = 0 ] && has "$out" "usage" && has "$out" "new <name> <folder>"'
 
+# --- a registered brain follows its project's pointer; add updates its entry -----------------------------------------
+mkdir -p "$HM/mv/.claude" "$HM/mv/phase-a" "$HM/mv/phase-b"
+printf 'status-of-mv-old\n' > "$HM/mv/phase-a/STATUS.md"; printf 'status-of-mv-new\n' > "$HM/mv/phase-b/STATUS.md"
+echo phase-a/STATUS.md > "$HM/mv/.claude/brain"
+bc "$HM/mv" add mv
+echo phase-b/STATUS.md > "$HM/mv/.claude/brain"     # the project moves its STATUS on
+bc "$HM/plain"
+check "list: a brain whose pointer moved on shows the pointer's STATUS, and a note naming the registered one" \
+  eval 'hasline "$out" "^  mv +$HM/mv +phase-b/STATUS.md, " && has "$out" "$HM/mv/phase-a/STATUS.md" && has "$out" "/brain add mv"'
+bc "$HM/plain" mv
+check "/brain mv: prints the pointer's STATUS, with the same note" \
+  eval 'has "$out" status-of-mv-new && ! has "$out" status-of-mv-old && has "$out" "/brain add mv"'
+bc "$HM/mv" add mv
+check "add mv again in its own project: updates the entry's STATUS instead of refusing" \
+  eval '[ $rc = 0 ] && has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"root\": \"$HM/mv\", \"status\": \"$HM/mv/phase-b/STATUS.md\"}"'
+bc "$HM/plain"
+check "list after the update: no note" eval 'hasline "$out" "^[* ] mv +$HM/mv +phase-b/STATUS.md, " && ! has "$out" "phase-a"'
+# A project folder that moved: the messages say how to fix it, and add points the entry at the new place.
+mv "$HM/mv" "$HM/mv2"
+bc "$HM/plain"
+check "list: a brain whose project folder is gone says how to fix it" \
+  eval 'has "$out" "names a missing project folder" && has "$out" "/brain add mv <folder>"'
+check "hook in a window that chose it: the warning says how to fix it too" \
+  eval 'has "$(hookout "$HM/plain")" "/brain add mv <folder>"'
+bc "$HM/plain" add mv "$HM/mv2"
+check "add mv <new folder> when its old folder is gone: the entry moves there" \
+  eval 'has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"root\": \"$HM/mv2\", \"status\": \"$HM/mv2/phase-b/STATUS.md\"}"'
+mkdir -p "$HM/mv3/.claude"; printf 's\n' > "$HM/mv3/STATUS.md"; echo STATUS.md > "$HM/mv3/.claude/brain"
+cp "$REG" "$T/reg.before"
+bc "$HM/plain" add mv "$HM/mv3"
+check "add mv <another folder> while its own folder still exists: refused, registry unchanged" \
+  eval 'has "$out" "brain: " && has "$out" "$HM/mv2" && cmp -s "$REG" "$T/reg.before"'
+
 # --- help and unknown words ------------------------------------------------------------------------------------------
 bc "$HM/plain" help
 all_in() { local t="$1"; shift; for w in "$@"; do has "$t" "$w" || return 1; done; }
