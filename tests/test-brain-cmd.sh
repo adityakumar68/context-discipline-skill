@@ -327,6 +327,62 @@ check "--args over 4,096 bytes: refused" eval 'has "$out" "brain: " && has "$out
 bc "$HM/plain" add sp4 '~/My Proj'
 check "argv form: a folder starting with ~/ is expanded too" reg "b['sp4']['root'] == '$HM/My Proj'"
 
+# --- messages and edge cases -------------------------------------------------------------------------------------
+cp "$REG" "$T/reg.keep"
+printf '{"version": 1, "brains": ' > "$REG"
+bc "$HM/plain" paper
+check "pick with a broken registry: the problem is named once, no bogus 'Registered:' list" \
+  eval 'has "$out" "not valid JSON" && ! has "$out" "Registered:"'
+cp "$T/reg.keep" "$REG"
+if [ "$(id -u)" != 0 ]; then   # root can write to a read-only folder
+  chmod 500 "$CFG"
+  bc "$HM/plain" add ro "$HM/c"
+  check "add when the registry cannot be written: one clear line, no Python traceback" \
+    eval '[ $rc = 0 ] && [ "$(printf "%s\n" "$out" | grep -c "")" = 1 ] && has "$out" "brain: cannot write $REG" && ! has "$out" Traceback'
+  bc "$HM/plain" rename sp sp9
+  check "rename when the registry cannot be written: one clear line" eval 'has "$out" "brain: cannot write" && ! has "$out" Traceback'
+  bc "$HM/plain" remove sp
+  check "remove when the registry cannot be written: one clear line" eval 'has "$out" "brain: cannot write" && ! has "$out" Traceback'
+  chmod 755 "$CFG"
+fi
+NOPY="$T/bin-without-python"; mkdir -p "$NOPY"
+for c in bash cat dirname basename readlink tr wc head tail od awk ps perl env date find sed cut paste mktemp mv rm \
+         chmod mkdir sort grep xargs true; do p=$(command -v "$c") && ln -s "$p" "$NOPY/$c"; done
+out=$(cd "$HM/plain" && env PATH="$NOPY" HOME="$HM" CLAUDE_PID=$$ "$NOPY/bash" "$B" 2>&1)
+check "list without python3: says named brains need python3, and does not blame the registry" \
+  eval 'has "$out" "need python3" && ! has "$out" "fix it or move it aside"'
+out=$(cd "$HM/plain" && env PATH="$NOPY" HOME="$T/empty-home" CLAUDE_PID=$$ "$NOPY/bash" "$B" 2>&1)
+check "list without python3 and no registry: no python3 line" eval '! has "$out" "python3" && has "$out" "This window uses"'
+python3 -I -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+d["brains"].update({"half": {"root": "/x"}, "Bad Name": {"root": "/y", "status": "/y/S.md"}, "nums": 5,
+                    "tabbed": {"root": "/a\tb", "status": "/a\tb/S.md"}})
+json.dump(d, open(sys.argv[1], "w"))' "$REG"
+bc "$HM/plain"
+check "list shows entries it cannot use, flagged (no entry hidden)" \
+  eval 'hasline "$out" "^  half +.*not usable" && hasline "$out" "^  Bad Name +.*not usable" && hasline "$out" "^  nums +.*not usable" && hasline "$out" "^  tabbed +.*not usable"'
+cp "$T/reg.keep" "$REG"
+bc "$HM/plain" rename sp sp
+check "rename to the same name: says so, registry unchanged" \
+  eval 'has "$out" "same name" && ! has "$out" "already used" && cmp -s "$REG" "$T/reg.keep"'
+mkdir -p "$HM/has/.claude" "$HM/has/phase-a"; printf 's\n' > "$HM/has/phase-a/STATUS.md"; echo phase-a/STATUS.md > "$HM/has/.claude/brain"
+before=$(tree "$HM/has")
+bc "$HM/plain" new has "$HM/has"
+check "new on a folder that already has a brain: refused, no stray files, points to /brain add" \
+  eval 'has "$out" "brain: " && has "$out" "/brain add has" && [ "$(tree "$HM/has")" = "$before" ] && cmp -s "$REG" "$T/reg.keep"'
+rm -f "$SES/pid-$$"; mkdir -p "$SES/pid-$$"
+bc "$HM/a" none
+check "a folder where the choice file goes: /brain none fails with a message, not a false success" \
+  eval 'has "$out" "brain: " && ! has "$out" "now uses no project brain"'
+rm -rf "$SES/pid-$$"
+printf '4242 (a (b) c) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 19 20\n' > "$T/fake-stat"
+check "Linux start time: field 22 of /proc/<pid>/stat, read past a comm with spaces and parentheses" \
+  eval '[ "$(. "$S/brain-lib.sh"; cd_stat_start "$T/fake-stat")" = 987654 ]'
+if [ -r "/proc/$$/stat" ]; then
+  check "on Linux the start time comes from /proc (ticks since boot, unmoved by clock changes)" \
+    eval '(. "$S/brain-lib.sh"; cd_process_start $$) | grep -Eq "^boot\+[0-9]+$"'
+fi
+
 # --- help and unknown words ------------------------------------------------------------------------------------------
 bc "$HM/plain" help
 all_in() { local t="$1"; shift; for w in "$@"; do has "$t" "$w" || return 1; done; }

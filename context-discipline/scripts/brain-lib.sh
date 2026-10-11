@@ -182,13 +182,29 @@ cd_valid_name() {
 # for messages.
 cd_printable() { printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '?' | head -c "${2:-64}"; }
 
-# cd_process_start <pid>: when process <pid> started, as ps prints it in the C locale and UTC ("" if ps cannot
-# tell), so the writer and the readers agree whatever their locale and time zone. Kept with a window's choice, so a
-# later process that gets the same PID does not inherit the choice.
+# cd_process_start <pid>: when process <pid> started ("" if it cannot be told). Kept with a window's choice, so a
+# later process that gets the same PID does not inherit the choice. On Linux it is "boot+<ticks>" from
+# /proc/<pid>/stat (clock ticks after boot, which a wall-clock step does not move); elsewhere, ps's start time in the
+# C locale and UTC, so the writer and the readers agree whatever their locale and time zone.
 cd_process_start() {
   local s
+  if [ -r "/proc/$1/stat" ]; then
+    s=$(cd_stat_start "/proc/$1/stat")
+    case "$s" in ''|*[!0-9]*) ;; *) printf 'boot+%s\n' "$s"; return 0 ;; esac
+  fi
   s=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | LC_ALL=C tr -cd 'A-Za-z0-9: ' | LC_ALL=C tr -s ' ')
   s="${s# }"; printf '%s\n' "${s% }"
+}
+
+# cd_stat_start <file>: field 22 (start time, in clock ticks after boot) of a /proc/<pid>/stat file. The fields are
+# counted after the last ") ", since field 2, the command name, may itself hold spaces and parentheses.
+cd_stat_start() {
+  local l f
+  l=$(head -c 4096 -- "$1" 2>/dev/null) || return 1
+  case "$l" in *") "*) ;; *) return 1 ;; esac
+  l="${l##*") "}"
+  read -r -a f <<<"$l"
+  printf '%s\n' "${f[19]:-}"
 }
 
 # cd_window_key <json>: the key of this Claude Code window's choice file: pid-$CLAUDE_PID (the Claude Code
@@ -299,17 +315,34 @@ def cmd_get(path, name):
     return 0
 
 
+def shown(s):
+    return BAD.sub("?", s) if isinstance(s, str) else ""
+
+
 def cmd_list(path):
-    """Print one line per usable entry: <name> TAB <root> TAB <status>, sorted. Exit 4: registry unusable."""
+    """Print one line per entry, sorted: <name> US <root> US <status> US <problem> (US = \\x1f; problem "" for a
+    usable entry, else why /brain cannot use it, with names and paths made printable). Exit 4: registry unusable."""
     reg, problem = read_registry(path)
     if reg is None:
         print(problem)
         return 4
     brains = reg["brains"]
     for name in sorted(brains):
-        e = entry(brains, name)
-        if e is not None and "\t" not in e[0] + e[1]:
-            print(f"{name}\t{e[0]}\t{e[1]}")
+        e, raw = entry(brains, name), brains[name]
+        if e is not None:
+            print("\x1f".join((name, e[0], e[1], "")))
+            continue
+        root = shown(raw.get("root")) if isinstance(raw, dict) else ""
+        if not NAME.match(name):
+            why = "its name is not a brain name; edit the registry to rename or remove it"
+        elif not isinstance(raw, dict):
+            why = "its entry is not an object; /brain add " + name + " <folder> replaces it"
+        elif not (isinstance(raw.get("root"), str) and isinstance(raw.get("status"), str)) or not raw.get("root") \
+                or not raw.get("status"):
+            why = "it needs both a root and a status path; /brain add " + name + " <folder> replaces it"
+        else:
+            why = "a path holds a tab or another control character; /brain add " + name + " <folder> replaces it"
+        print("\x1f".join((shown(name)[:64], root, "", why)))
     return 0
 
 

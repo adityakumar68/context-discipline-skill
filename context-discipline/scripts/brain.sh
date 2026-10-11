@@ -87,6 +87,15 @@ def write(path, reg):
         raise
 
 
+def save(path, reg):
+    """write(), with a failure turned into one line (exit 4) instead of a traceback."""
+    try:
+        write(path, reg)
+    except OSError as e:
+        print(f"cannot write {path}: {e.strerror or e}")
+        sys.exit(4)
+
+
 def cmd_set(path, name, root, status):
     """Register <name>. An existing entry is updated if it is for the same project folder, if its folder no longer
     exists (the project moved), or if it is unusable; any other existing entry is left alone (6)."""
@@ -107,7 +116,7 @@ def cmd_set(path, name, root, status):
             print(e[0])
             return 6
     reg["brains"][name] = {"root": root, "status": status}
-    write(path, reg)
+    save(path, reg)
     if change:
         print(change)
         return 7
@@ -123,7 +132,7 @@ def cmd_rename(path, old, new):
         print(e.get("root") if isinstance(e, dict) and isinstance(e.get("root"), str) else "another entry")
         return 6
     reg["brains"] = {(new if k == old else k): v for k, v in reg["brains"].items()}
-    write(path, reg)
+    save(path, reg)
     return 0
 
 
@@ -132,7 +141,7 @@ def cmd_remove(path, name):
     if name not in reg["brains"]:
         return 3
     e = reg["brains"].pop(name)
-    write(path, reg)
+    save(path, reg)
     print(e.get("root", "") if isinstance(e, dict) and isinstance(e.get("root"), str) else "")
     return 0
 
@@ -148,7 +157,11 @@ need_python() {
 }
 
 # names: the registered names, as "a, b, c" ("" if none or the registry cannot be read).
-names() { regpy list "$REG" 2>/dev/null | cut -f1 | paste -sd, - | sed 's/,/, /g'; }
+names() {
+  local o
+  o=$(regpy list "$REG" 2>/dev/null) || return 0
+  printf '%s\n' "$o" | cut -d $'\037' -f1 | paste -sd, - | sed 's/,/, /g'
+}
 
 # commas <n>: 12345 -> 12,345
 commas() {
@@ -199,6 +212,7 @@ prune() {
 # put_choice <file> <name> <start>: write a choice file atomically.
 put_choice() {
   local tmp
+  [ -d "$1" ] && return 1   # mv would move the file into it and report success
   tmp=$(mktemp "$SES/.choice.XXXXXX" 2>/dev/null) || return 1
   if printf '%s\n%s\n' "$2" "$3" > "$tmp" && mv -f -- "$tmp" "$1"; then return 0; fi
   rm -f -- "$tmp"; return 1
@@ -214,10 +228,12 @@ write_choice() {
   fi
   case "$key" in pid-*) start=$(cd_process_start "${key#pid-}") ;; esac
   (umask 077 && mkdir -p -- "$SES") 2>/dev/null
+  if [ ! -e "$SES" ] && [ ! -L "$SES" ]; then say_err "cannot create $SES (see README: Several brains, sandbox)."; return 1; fi
   if [ -L "$SES" ] || [ ! -d "$SES" ]; then say_err "cannot use $SES (not a folder)."; return 1; fi
   chmod 700 "$SES" 2>/dev/null
   prune
-  put_choice "$SES/$key" "$1" "$start" || { say_err "cannot write $SES/$key."; return 1; }
+  if [ -d "$SES/$key" ]; then say_err "$SES/$key is a folder; remove it, then run /brain again."; return 1; fi
+  put_choice "$SES/$key" "$1" "$start" || { say_err "cannot write $SES/$key (see README: Several brains, sandbox)."; return 1; }
 }
 
 # --- commands -----------------------------------------------------------------------------------------------------
@@ -340,6 +356,11 @@ new() {
     0) say_err "the name \"$name\" is already used for ${out%%$'\n'*}; pick another name."; return ;;
     *) say_err "$REG ${out:-cannot be read}; fix it or move it aside, then run /brain again."; return ;;
   esac
+  dir=$(cd -P -- "$folder" 2>/dev/null && pwd -P) || dir=""
+  if [ -n "$dir" ] && { [ -e "$dir/.claude/brain" ] || [ -L "$dir/.claude/brain" ]; }; then
+    say_err "$dir already has a brain ($dir/.claude/brain); register it as it is with: /brain add $name $dir"
+    return
+  fi
   if ! bash "$here/init-brain.sh" "$folder" 2>&1; then
     say_err "init-brain.sh did not finish (see above); nothing registered."; return
   fi
@@ -347,19 +368,28 @@ new() {
   add "$name" "$folder"
 }
 
-# rechoose <old> <new>: windows that chose <old> now read <new>.
+# rechoose <old> <new>: windows that chose <old> now read <new>. Each file is checked again just before it is
+# replaced, so a choice that window made in the meantime is kept.
 rechoose() {
-  local f name start
+  local f name start tmp now
   for f in "$SES"/pid-* "$SES"/sid-*; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     { IFS= read -r name; IFS= read -r start; } < <(head -c "$CD_CHOICE_READ" -- "$f" 2>/dev/null)
-    [ "$name" = "$1" ] && put_choice "$f" "$2" "$start"
+    [ "$name" = "$1" ] || continue
+    tmp=$(mktemp "$SES/.choice.XXXXXX" 2>/dev/null) || continue
+    if printf '%s\n%s\n' "$2" "$start" > "$tmp" && IFS= read -r now < <(head -c "$CD_CHOICE_READ" -- "$f" 2>/dev/null) \
+       && [ "$now" = "$1" ] && [ -f "$f" ]; then
+      mv -f -- "$tmp" "$f" || rm -f -- "$tmp"
+    else
+      rm -f -- "$tmp"
+    fi
   done
 }
 
 rename() {
   local old="$1" new="$2" out rc=0
   cd_valid_name "$old" || { say_err "\"$(cd_printable "$old")\" is not a brain name."; return; }
+  if [ "$old" = "$new" ]; then say_err "\"$old\" already has that name (same name); nothing changed."; return; fi
   new_name_ok "$new" || return
   need_python || return
   out=$(regpy rename "$REG" "$old" "$new") || rc=$?
@@ -387,17 +417,21 @@ remove() {
 }
 
 list() {
-  local sel s_how s_name s_root s_status s_subject s_refused rows rc=0 width=4 name root status info mark
+  local sel s_how s_name s_root s_status s_subject s_refused rows rc=0 width=4 name root status problem info mark
   local roots="" here_root here_rel
   cd_select_brain ""; sel=$?
   s_how="$CD_HOW"; s_name="$CD_NAME"; s_root="$CD_ROOT"; s_status="$CD_STATUS"
   s_subject="$CD_SUBJECT"; s_refused="$CD_REFUSED"
-  if command -v python3 >/dev/null 2>&1; then
+  if [ ! -e "$REG" ] && [ ! -L "$REG" ]; then
+    rows=""
+  elif command -v python3 >/dev/null 2>&1; then
     rows=$(regpy list "$REG") || rc=$?
   else
-    rows="needs python3 to be read"; rc=4
+    rows=""; rc=5
   fi
-  if [ "$rc" != 0 ]; then
+  if [ "$rc" = 5 ]; then
+    echo "Named brains need python3, which is not installed (the registry is $REG); the folder walk-up still works."
+  elif [ "$rc" != 0 ]; then
     echo "The registry $REG ${rows:-cannot be read}; fix it or move it aside."
     rows=""
   elif [ -z "$rows" ]; then
@@ -405,10 +439,12 @@ list() {
     echo "Register a folder's brain: /brain add <name> [folder]. Set up a new one: /brain new <name> <folder>"
   else
     echo "Named brains (registry: $REG):"
-    while IFS=$'\t' read -r name root status; do [ ${#name} -gt $width ] && width=${#name}; done <<<"$rows"
-    while IFS=$'\t' read -r name root status; do
-      mark=" "
-      if cd_check_named "$root" "$status" "$name"; then
+    while IFS=$'\037' read -r name root status problem; do [ ${#name} -gt $width ] && width=${#name}; done <<<"$rows"
+    while IFS=$'\037' read -r name root status problem; do
+      mark=" "; CD_NOTE=""
+      if [ -n "$problem" ]; then
+        info="not usable: $problem"
+      elif cd_check_named "$root" "$status" "$name"; then
         info="$CD_REL, $(commas "$CD_SIZE") bytes, changed $(date -r "$CD_STATUS" +%Y-%m-%d 2>/dev/null)"
         roots="$roots"$'\n'"$CD_ROOT"
         if [ "$sel" = 0 ] && { [ "$s_name" = "$name" ] || { [ "$s_how" = folder ] && [ "$s_status" = "$CD_STATUS" ]; }; }; then
