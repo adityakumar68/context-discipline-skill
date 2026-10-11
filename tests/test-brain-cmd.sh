@@ -519,6 +519,28 @@ if [ -r "/proc/$$/stat" ]; then
     eval '(. "$S/brain-lib.sh"; cd_process_start $$) | grep -Eq "^boot\+[0-9]+$"'
 fi
 
+# --- rename moves a brain kept in <config>/brains/<old>, and its last-used lines ------------------------------------
+cp "$REG" "$T/reg.keep"
+bc "$HM/plain" new mover
+printf '%s\tmover\n%s\tother\n' "$HM/x1" "$HM/x2" >> "$SES/last-used"
+bc "$HM/plain" rename mover moved
+check "rename of a brain in <config>/brains/<old>: the folder becomes brains/<new>, the registry follows, it says so" \
+  eval '[ -f "$CFG/brains/moved/STATUS.md" ] && [ ! -e "$CFG/brains/mover" ] && reg "b[\"moved\"][\"dir\"] == \"$CFG/brains/moved\"" && has "$out" "$CFG/brains/moved"'
+check "... and the hooks load it under its new name" eval 'has "$(hookout "$HM/plain")" "(brain \"moved\", chosen with /brain)"'
+check "rename: last-used lines follow the new name, others kept" \
+  eval 'grep -qxF "$HM/x1	moved" "$SES/last-used" && ! grep -q "	mover\$" "$SES/last-used" && grep -qxF "$HM/x2	other" "$SES/last-used"'
+bc "$HM/plain" new mover2; mkdir -p "$CFG/brains/taken"
+bc "$HM/plain" rename mover2 taken
+check "rename when brains/<new> already exists: the folder stays, the registry keeps it, it says so" \
+  eval '[ -f "$CFG/brains/mover2/STATUS.md" ] && reg "b[\"taken\"][\"dir\"] == \"$CFG/brains/mover2\"" && has "$out" "already exists"'
+bc "$HM/plain" new mover2
+check "new <name> whose default folder is another brain's: refused, names that brain" \
+  eval 'has "$out" "brain: " && has "$out" "\"taken\"" && ! reg "\"mover2\" in b"'
+bc "$HM/plain" new other3 --at "$CFG/brains/mover2"
+check "new --at a folder registered under another name: refused the same way" \
+  eval 'has "$out" "\"taken\"" && ! reg "\"other3\" in b"'
+cp "$T/reg.keep" "$REG"; bc "$HM/plain" none
+
 # --- writes are serialised: /brain commands run at the same time lose no update -------------------------------------
 cp "$REG" "$T/reg.keep"
 for i in $(seq 1 16); do mkdir -p "$HM/par/b$i"; echo s > "$HM/par/b$i/STATUS.md"; done

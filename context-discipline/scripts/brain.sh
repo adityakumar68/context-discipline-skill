@@ -10,7 +10,8 @@
 #                                   <config>/brains/<name> or <folder>, register it and attach it to this window
 #   brain.sh add <name> <folder|STATUS file>   register an existing brain: <folder>/STATUS.md, or that file
 #   brain.sh add <name>             register the brain an old .claude/brain pointer in the current folder names
-#   brain.sh rename <old> <new>     rename a brain (registry, the windows' choices and its compaction logs)
+#   brain.sh rename <old> <new>     rename a brain (registry, the windows' choices, its compaction logs, and its
+#                                   folder when that is the default <config>/brains/<old>)
 #   brain.sh remove <name>          unregister a brain (its files and logs stay)
 #   brain.sh --args                 the same, with the words read from stdin as one raw string (what the /brain
 #                                   skill passes): split here like shell words ('...', "...", \) with nothing
@@ -50,7 +51,7 @@ usage: /brain                              list the brains; * marks the one this
                                            and attach it to this window
        /brain add <name> <folder|STATUS file>   register an existing brain (no path: the one an old
                                            .claude/brain pointer in the current folder names)
-       /brain rename <old> <new>           rename a brain (registry and compaction logs)
+       /brain rename <old> <new>           rename a brain (registry, logs, and its default folder)
        /brain remove <name>                unregister a brain (its files stay)
 Names: 1 to 32 of a-z, 0-9 and "-". Registry: $REG
 A brain belongs to a Claude Code window, not a folder. Starting Claude Code with CD_BRAIN=<name> (or none)
@@ -184,6 +185,46 @@ def cmd_remove(path, name):
     return 0
 
 
+def cmd_owner(path, folder):
+    """Print the name of the brain whose folder is <folder> (symlinks resolved), if any."""
+    reg, _ = read_registry(path)
+    target = os.path.realpath(folder)
+    for name in sorted(reg["brains"] if reg else {}):
+        e = entry(reg["brains"], name)
+        if e is not None and os.path.realpath(e[0]) == target:
+            print(name)
+            return 0
+    return 0
+
+
+def cmd_movedir(path, name, src, dst):
+    """If brain <name> lives in the default folder <src>, move that folder to <dst> and point the registry there.
+    Prints one line saying what happened, or nothing if the brain lives elsewhere."""
+    lock(path)
+    reg = load(path)
+    e = entry(reg["brains"], name)
+    if e is None or os.path.islink(src) or not os.path.isdir(src) or \
+            os.path.realpath(e[0]) != os.path.realpath(src):
+        return 0
+    if os.path.lexists(dst):
+        print(f"Its folder stays {src} ({dst} already exists).")
+        return 0
+    try:
+        os.rename(src, dst)
+    except OSError as err:
+        print(f"Its folder stays {src} (it could not be moved: {err.strerror or err}).")
+        return 0
+    reg["brains"][name] = dict(reg["brains"][name], dir=dst)
+    try:
+        write(path, reg)
+    except OSError as err:
+        os.rename(dst, src)
+        print(f"Its folder stays {src} (cannot write {path}: {err.strerror or err}).")
+        return 0
+    print(f"Its folder moved to {dst}.")
+    return 0
+
+
 def cmd_upgrade(path, ts, dry):
     """For install.sh: convert a version 1 registry to version 2, after a backup to <path>.bak-<ts>. Prints one
     summary line, or nothing if there is no registry or it is already version 2."""
@@ -217,7 +258,8 @@ def cmd_upgrade(path, ts, dry):
     return 0
 
 
-COMMANDS.update(set=cmd_set, rename=cmd_rename, remove=cmd_remove, upgrade=cmd_upgrade)
+COMMANDS.update(set=cmd_set, rename=cmd_rename, remove=cmd_remove, upgrade=cmd_upgrade, owner=cmd_owner,
+                movedir=cmd_movedir)
 PY
 
 # regpy <command> <args>...: run a registry command; its output on stdout, its exit code returned.
@@ -531,6 +573,12 @@ new() {
     folder="$(cd_config_dir)/brains/$name"
     mkdir -p -- "${folder%/*}" 2>/dev/null || { say_err "cannot create ${folder%/*}."; return; }
   fi
+  out=$(regpy owner "$REG" "$folder" 2>/dev/null) || out=""
+  if [ -n "$out" ]; then
+    say_err "$folder is already the folder of brain \"$out\"; attach that one (/brain $out), or pick another name" \
+      "or --at folder."
+    return
+  fi
   if [ -e "$folder/STATUS.md" ] || [ -L "$folder/STATUS.md" ]; then
     say_err "$folder already holds a STATUS.md; register it as it is with: /brain add $name $folder"
     return
@@ -563,6 +611,18 @@ rechoose() {
   done
 }
 
+# rename_last_used <old> <new>: the folders that last attached <old> now name <new> (for the no-brain hint).
+rename_last_used() {
+  local file="$SES/last-used" tmp
+  [ -f "$file" ] && [ ! -L "$file" ] || return 0
+  tmp=$(mktemp "$SES/.last.XXXXXX" 2>/dev/null) || return 0
+  if head -c 262144 -- "$file" 2>/dev/null | O="$1" N="$2" awk -F '\t' 'BEGIN { OFS = "\t" }
+       NF == 2 { if ($2 == ENVIRON["O"]) $2 = ENVIRON["N"]; print }' > "$tmp" && mv -f -- "$tmp" "$file"; then
+    return 0
+  fi
+  rm -f -- "$tmp"
+}
+
 # move_logs <old> <new>: brain-logs/<old> becomes brain-logs/<new>, unless that already exists.
 move_logs() {
   [ -d "$LOGS/$1" ] && [ ! -L "$LOGS/$1" ] || return 0
@@ -584,7 +644,10 @@ rename() {
   out=$(regpy rename "$REG" "$old" "$new") || rc=$?
   case $rc in
     0) rechoose "$old" "$new"
-       printf 'Renamed brain "%s" to "%s" (no file in its folder was changed).\n' "$old" "$new"
+       printf 'Renamed brain "%s" to "%s".\n' "$old" "$new"
+       out=$(regpy movedir "$REG" "$new" "$(cd_config_dir)/brains/$old" "$(cd_config_dir)/brains/$new") || true
+       [ -n "$out" ] && printf '%s\n' "$out"
+       rename_last_used "$old" "$new"
        move_logs "$old" "$new" ;;
     3) say_err "no brain named \"$old\" in $REG. See /brain." ;;
     6) say_err "the name \"$new\" is already used for $out; pick another name." ;;

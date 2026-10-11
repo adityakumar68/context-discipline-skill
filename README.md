@@ -196,7 +196,7 @@ A brain belongs to a Claude Code session, not to a folder. Its folder is only wh
 /brain new thesis [--at <dir>]  create a brain (default folder ~/.claude/brains/thesis) and attach it
 /brain add paper <dir|file>     register an existing brain: <dir>/STATUS.md, or that STATUS file
 /brain add paper                register the brain an old .claude/brain pointer in the current folder names
-/brain rename paper paper1      rename it (registry, the windows' choices and its compaction logs)
+/brain rename paper paper1      rename it (registry, windows' choices, logs; a default folder moves too)
 /brain remove paper1            unregister it; its files stay
 ```
 

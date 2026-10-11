@@ -72,7 +72,8 @@ who registers it.
   date, trigger and session, then the summary verbatim. Never in the brain's folder (it may be a git repo, and a
   summary can quote anything the session saw) or the session's folder. The folders are created private (mode 700),
   files are owner-only (mode 600) and never overwritten; a log folder that is a symlink is refused.
-- `/brain rename` moves the brain's log folder with it; `/brain remove` leaves it.
+- `/brain rename` moves the brain's log folder with it (and its folder, when that is the default
+  `<config>/brains/<old>`); `/brain remove` leaves them.
 - Use it to check what a compaction kept; what it dropped is still in the session transcript.
 
 ## UserPromptSubmit: ctx-nudge.sh
