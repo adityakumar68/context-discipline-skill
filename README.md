@@ -349,7 +349,12 @@ categories; the skill maps each to a fix. Previews that look like credentials ar
 `git pull && ./install.sh` in your clone. The installed copy is refreshed (the old one goes to `skill-backups/`),
 missing hooks are added (an install from before the compaction hooks gets the two new ones, and its four
 `SessionStart` entries become one), the CLAUDE.md line of an earlier version is replaced, and a version 1 registry is
-converted. Folder pointers need one `/brain add <name>` each (see Brains).
+converted. Folder pointers need one `/brain add <name>` each (see Brains); restart Claude Code windows that
+were open during the update first, since they lose a pointer brain at their next `/clear` or compaction.
+
+Going back to a version from before session brains: it reads only a version 1 registry, so restore the backup the
+installer made (`~/.claude/brains.json.bak-<timestamp>`) or re-register the brains with that version's `/brain add`;
+brains created since then are not in that backup.
 
 ## Uninstalling
 

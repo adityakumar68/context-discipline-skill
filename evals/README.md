@@ -1,5 +1,8 @@
 # Evals
 
+**Out of date:** these evals predate session brains. Eval 1 and `grade_eval1.py` check the old design, a
+`.claude/brain` pointer in the project folder, which the hooks no longer read; re-run them only after updating both.
+
 These evals check whether an agent follows the skill's checklist, not the scripts (the scripts are covered by
 `tests/`). They do not measure context size or whether state survives a compaction; read the audit summary at the
 top of [RESULTS.md](RESULTS.md) before using the numbers.
