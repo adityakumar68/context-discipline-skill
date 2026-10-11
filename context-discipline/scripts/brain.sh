@@ -10,6 +10,10 @@
 #   brain.sh new <name> <folder>    set up a brain in <folder> with init-brain.sh, then register it
 #   brain.sh rename <old> <new>     rename a registered brain (registry only)
 #   brain.sh remove <name>          unregister a brain (registry only; its files stay)
+#   brain.sh --args                 the same, with the words read from stdin as one raw string (what the /brain
+#                                   skill passes): split here like shell words ('...', "...", \) with nothing
+#                                   expanded, so no character in it can run a command or cut the command short
+# A folder argument that starts with ~ or ~/ is taken from $HOME.
 #
 # Registry: <config>/brains.json, <config> being $CLAUDE_CONFIG_DIR or ~/.claude. A window's choice:
 # <config>/brain-sessions/pid-$CLAUDE_PID (else sid-$CLAUDE_CODE_SESSION_ID), two lines: the name (or "none") and
@@ -151,6 +155,15 @@ commas() {
   local n="$1" out=""
   while [ ${#n} -gt 3 ]; do out=",${n#"${n%???}"}$out"; n="${n%???}"; done
   printf '%s' "$n$out"
+}
+
+# expand_tilde <path>: a leading ~ or ~/ replaced by $HOME (a quoted ~ reaches the script unexpanded).
+expand_tilde() {
+  case "$1" in
+    "~") printf '%s\n' "${HOME:-~}" ;;
+    "~/"*) printf '%s\n' "${HOME:-~}/${1#\~/}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
 }
 
 # new_name_ok <name>: true if <name> can be registered (a valid name, not a word /brain itself uses).
@@ -296,7 +309,8 @@ register() {
 }
 
 add() {
-  local name="$1" folder="${2:-$PWD}" dir
+  local name="$1" folder dir
+  folder=$(expand_tilde "${2:-$PWD}")
   new_name_ok "$name" || return
   need_python || return
   dir=$(cd -P -- "$folder" 2>/dev/null && pwd -P) || { say_err "not a folder: $folder"; return; }
@@ -316,7 +330,8 @@ add() {
 }
 
 new() {
-  local name="$1" folder="$2" dir rc=0 out
+  local name="$1" folder dir rc=0 out
+  folder=$(expand_tilde "$2")
   new_name_ok "$name" || return
   need_python || return
   out=$(regpy get "$REG" "$name") || rc=$?
@@ -439,6 +454,25 @@ list() {
 }
 
 usage_err() { echo "brain: wrong arguments."; usage; }
+
+# --args: the /brain skill passes the user's raw argument string on stdin, in a quoted heredoc that the shell never
+# reads. Split it into words with xargs, which honours '...', "..." and backslashes and expands nothing.
+if [ "${1-}" = --args ] && [ $# = 1 ]; then
+  raw=$(head -c 4097 2>/dev/null)
+  if [ "$(printf '%s' "$raw" | LC_ALL=C wc -c | tr -d '[:space:]')" -gt 4096 ]; then
+    say_err "the arguments are too long (over 4,096 bytes)."; exit 0
+  fi
+  words=()
+  if [ -n "${raw//[[:space:]]/}" ]; then
+    if ! printf '%s' "$raw" | xargs true >/dev/null 2>&1; then   # fails only on an unmatched quote
+      say_err "unmatched quote in: $(cd_printable "$raw" 200)" \
+        "(quote a path with ' or spaces in double quotes, as in /brain add x \"~/Bob's Proj\")."
+      exit 0
+    fi
+    while IFS= read -r -d '' w; do words+=("$w"); done < <(printf '%s' "$raw" | xargs printf '%s\0' 2>/dev/null)
+  fi
+  set -- ${words[@]+"${words[@]}"}
+fi
 
 case "${1-}" in
   "") if [ $# -le 1 ]; then list; else usage_err; fi ;;

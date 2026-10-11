@@ -295,6 +295,38 @@ bc "$HM/plain" add mv "$HM/mv3"
 check "add mv <another folder> while its own folder still exists: refused, registry unchanged" \
   eval 'has "$out" "brain: " && has "$out" "$HM/mv2" && cmp -s "$REG" "$T/reg.before"'
 
+# --- --args: the raw argument string from the /brain skill, split by the script itself --------------------------
+# bca <cwd> <raw>: run brain.sh --args with <raw> on stdin, as the skill's quoted heredoc passes $ARGUMENTS.
+bca() { out=$(cd "$1" && printf '%s\n' "$2" | env HOME="$HM" CLAUDE_PID=$$ perl -e 'alarm shift; exec @ARGV' 30 \
+  bash "$B" --args 2>&1); rc=$?; }
+mkdir -p "$HM/My Proj/.claude"; printf 'status-of-space\n' > "$HM/My Proj/STATUS.md"; echo STATUS.md > "$HM/My Proj/.claude/brain"
+bca "$HM/plain" "add sp '~/My Proj'"
+check "--args: a quoted ~/path with a space is one argument, ~ expanded" \
+  eval '[ $rc = 0 ] && has "$out" "Registered brain \"sp\"" && reg "b[\"sp\"][\"root\"] == \"$HM/My Proj\""'
+bca "$HM/plain" 'add sp2 ~/My\ Proj'
+check "--args: a backslash-escaped space works too" reg "b['sp2']['root'] == '$HM/My Proj'"
+bca "$HM/plain" "add sp3 \"$HM/My Proj\""
+check "--args: a double-quoted absolute path" reg "b['sp3']['root'] == '$HM/My Proj'"
+cp "$REG" "$T/reg.before"
+bca "$HM/a" 'add tick `touch '"$T"'/pwned1`'
+check "--args: a backtick is plain text: no command runs, the current folder is not registered" \
+  eval '[ ! -e "$T/pwned1" ] && has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
+bca "$HM/a" 'zzz; touch '"$T"'/pwned2'
+check "--args: ; is plain text: nothing runs, usage shown" eval '[ ! -e "$T/pwned2" ] && has "$out" "usage"'
+bca "$HM/a" 'alpha $(touch '"$T"'/pwned3) | tee '"$T"'/pwned4'
+check "--args: \$(...) and | are plain text" eval '[ ! -e "$T/pwned3" ] && [ ! -e "$T/pwned4" ] && has "$out" "usage"'
+bca "$HM/plain" "add x Bob's"
+check "--args: an unmatched quote: one clear error, exit 0" \
+  eval '[ $rc = 0 ] && has "$out" "brain: " && has "$out" "quote" && cmp -s "$REG" "$T/reg.before"'
+bca "$HM/plain" ""
+check "--args with nothing: the list" has "$out" "Named brains"
+bca "$HM/plain" "  help  "
+check "--args: surrounding spaces ignored" has "$out" "usage: /brain"
+bca "$HM/plain" "$(printf 'x%.0s' $(seq 1 5000))"
+check "--args over 4,096 bytes: refused" eval 'has "$out" "brain: " && has "$out" "too long"'
+bc "$HM/plain" add sp4 '~/My Proj'
+check "argv form: a folder starting with ~/ is expanded too" reg "b['sp4']['root'] == '$HM/My Proj'"
+
 # --- help and unknown words ------------------------------------------------------------------------------------------
 bc "$HM/plain" help
 all_in() { local t="$1"; shift; for w in "$@"; do has "$t" "$w" || return 1; done; }

@@ -484,20 +484,24 @@ check "/brain skill: copied to skills/brain, identical to the repo's brain/" \
 check "/brain skill: the summary names it" eval 'printf "%s" "$out" | grep -q "^  brain skill: *copied to $BR"'
 check "/brain skill: user-invoked only (disable-model-invocation: true), named brain" \
   eval 'grep -qx "disable-model-invocation: true" "$BR/SKILL.md" && grep -qx "name: brain" "$BR/SKILL.md"'
-# The skill's one command, as Claude Code runs it: ${CLAUDE_SKILL_DIR} and $ARGUMENTS substituted, then bash.
-bang=$(grep -m1 '^!`' "$BR/SKILL.md" | sed 's/^!`//; s/`$//')
-check "/brain skill: its command runs brain.sh from the installed context-discipline skill with \$ARGUMENTS" \
-  eval 'printf "%s" "$bang" | grep -qF "bash \"\${CLAUDE_SKILL_DIR}/../context-discipline/scripts/brain.sh\" \$ARGUMENTS"'
+# The skill's one command, as Claude Code runs it: a fenced ```! block, ${CLAUDE_SKILL_DIR} and $ARGUMENTS
+# substituted, then bash. $ARGUMENTS sits alone in a quoted heredoc, so the shell never parses the user's text.
+block=$(sed -n '/^```!$/,/^```$/p' "$BR/SKILL.md" | sed '1d;$d')
+first=$(printf '%s\n' "$block" | head -n 1)
+check "/brain skill: one fenced command: brain.sh --args, with \$ARGUMENTS alone in a quoted heredoc" \
+  eval '[ "$first" = "bash \"\${CLAUDE_SKILL_DIR}/../context-discipline/scripts/brain.sh\" --args <<'"'"'CD_BRAIN_ARGS_END'"'"'" ] && [ "$(printf "%s\n" "$block" | sed -n 2p)" = "\$ARGUMENTS" ] && [ "$(printf "%s\n" "$block" | sed -n 3p)" = CD_BRAIN_ARGS_END ] && [ "$(printf "%s\n" "$block" | grep -c "")" = 3 ] && ! grep -q "^!\`" "$BR/SKILL.md"'
 run_bang() {   # run_bang <arguments>: the command with the substitutions made, run in a plain folder
-  local cmd="${bang//\$\{CLAUDE_SKILL_DIR\}/$BR}"; cmd="${cmd//\$ARGUMENTS/$1}"
+  local cmd="${block//\$\{CLAUDE_SKILL_DIR\}/$BR}"; cmd="${cmd//\$ARGUMENTS/$1}"
   (mkdir -p "$H31/work" && cd "$H31/work" && env -u CLAUDE_CONFIG_DIR HOME="$H31" CLAUDE_PID=$$ bash -c "$cmd" 2>&1)
 }
 check "/brain skill: '/brain help' runs the installed script and prints its usage" eval 'run_bang help | grep -q "^usage: /brain"'
 check "/brain skill: '/brain' (no arguments) lists, exit 0" eval 'run_bang "" | grep -q "No named brains yet"'
-# allowed-tools pre-approves exactly that command (with and without arguments), so it runs without a prompt.
+check "/brain skill: arguments with a backtick, \$(...) and ; run nothing" \
+  eval 'run_bang "x \`touch $H31/p1\` \$(touch $H31/p2); touch $H31/p3" >/dev/null; [ ! -e "$H31/p1" ] && [ ! -e "$H31/p2" ] && [ ! -e "$H31/p3" ]'
+# allowed-tools pre-approves exactly that command, so it runs without a prompt.
 rules=$(sed -n '/^allowed-tools:/,/^[a-z-]*:/p' "$BR/SKILL.md" | sed -n 's/^ *- Bash(\(.*\))$/\1/p')
-check "/brain skill: allowed-tools has a Bash rule for the bare command and one for it with arguments" \
-  eval '[ "$(printf "%s\n" "$rules" | grep -c "")" = 2 ] && printf "%s\n" "$rules" | grep -qxF "${bang% \$ARGUMENTS}" && printf "%s\n" "$rules" | grep -qxF "${bang% \$ARGUMENTS} *"'
+check "/brain skill: allowed-tools is one Bash rule: that script with --args" \
+  eval '[ "$(printf "%s\n" "$rules" | grep -c "")" = 1 ] && [ "$rules" = "bash \"\${CLAUDE_SKILL_DIR}/../context-discipline/scripts/brain.sh\" --args *" ]'
 before=$(tree_sum "$C"); out=$(inst "$H31" 2>&1)
 check "/brain skill: a second run leaves it unchanged" \
   eval '[ "$before" = "$(tree_sum "$C")" ] && printf "%s" "$out" | grep -q "brain skill: *unchanged"'
