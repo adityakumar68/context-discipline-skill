@@ -148,6 +148,18 @@ choose "pid-$$" b "$start"
 hook "$HM/a" CLAUDE_PID=$$
 check "choice recorded with this process's start time ($start): used" eval '[ -n "$start" ] && has "$out" status-of-b'
 
+# Many windows may attach the same brain at once: each window has its own choice file.
+start2=$(. "$S/brain-lib.sh"; cd_process_start $PPID)
+choose "pid-$$" b "$start"; choose "pid-$PPID" b "$start2"
+hook "$HM/plain" CLAUDE_PID=$$; out1="$out"; hook "$HM/plain" CLAUDE_PID=$PPID
+check "two windows attached to brain b: the hook loads it in both" \
+  eval 'has "$out1" "(brain \"b\", chosen with /brain)" && has "$out" "(brain \"b\", chosen with /brain)"'
+choose "pid-$$" none
+hook "$HM/plain" CLAUDE_PID=$$; out1="$out"; hook "$HM/plain" CLAUDE_PID=$PPID
+check "one of them detaches (/brain none): the other still loads b" \
+  eval 'nobrain "$out1" && has "$out" status-of-b'
+rm -f "$CFG/brain-sessions/pid-$PPID"
+
 # Without CLAUDE_PID (older Claude Code), the key is the session id.
 unchoose; choose sid-sess-1 b
 hook "$HM/a"

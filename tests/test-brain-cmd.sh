@@ -233,6 +233,35 @@ bc "$HM/a" beta
 check "writing a choice prunes 8-day-old choices of finished windows" eval '[ ! -e "$SES/pid-1" ] && [ ! -e "$SES/sid-old" ]'
 check "... and keeps recent ones, and old ones whose window still runs" eval '[ -e "$SES/sid-recent" ] && [ -e "$SES/pid-$PPID" ]'
 
+# --- many windows on one brain ---------------------------------------------------------------------------------------
+# Window 1 is CLAUDE_PID=$$ (bc's default), window 2 is CLAUDE_PID=$PPID: both processes run while the tests do.
+rm -f "$SES"/pid-* "$SES"/sid-*
+bc "$HM/plain" alpha
+check "attaching a brain no other window uses: no shared-brain note" eval '! has "$out" "Also attached"'
+bc "$HM/plain" CLAUDE_PID=$PPID -- alpha
+check "attaching it from a second window: one line saying it is shared and STATUS may change" \
+  has "$out" "Also attached in 1 other window; STATUS may change under you."
+check "both windows' choice files name it" \
+  eval '[ "$(head -n 1 "$SES/pid-$$")" = alpha ] && [ "$(head -n 1 "$SES/pid-$PPID")" = alpha ]'
+check "both windows load it (the hook)" \
+  eval 'has "$(hookout "$HM/plain")" status-of-a && has "$(hookout "$HM/plain" CLAUDE_PID=$PPID)" status-of-a'
+bc "$HM/plain"
+check "list: the brain shows 2 attached windows" hasline "$out" "^\* alpha .*, attached in 2 windows\$"
+check "list: a brain no window uses shows no count" eval '! hasline "$out" "^  beta .*attached"'
+printf 'alpha\nMon Jan 1 00:00:00 2001\n' > "$SES/pid-1"; printf 'alpha\n\n' > "$SES/sid-other"
+bc "$HM/plain"
+check "list: a choice left by a finished window (same PID, other start) and one known only by session id: not counted" \
+  hasline "$out" "^\* alpha .*, attached in 2 windows\$"
+bc "$HM/plain" CLAUDE_PID=$PPID -- beta
+bc "$HM/plain" CLAUDE_PID=$PPID -- alpha
+check "the note counts only the other live windows" has "$out" "Also attached in 1 other window;"
+bc "$HM/plain" none
+check "one window detaches: the other keeps the brain" \
+  eval '! has "$(hookout "$HM/plain")" status-of && has "$(hookout "$HM/plain" CLAUDE_PID=$PPID)" status-of-a'
+bc "$HM/plain"
+check "list after one detached: 1 attached window" hasline "$out" "^  alpha .*, attached in 1 window\$"
+rm -f "$SES/pid-$PPID" "$SES/pid-1" "$SES/sid-other"
+
 # --- /brain auto is gone: there is no folder default to go back to ------------------------------------------------
 cp "$SES/pid-$$" "$T/choice.before"
 bc "$HM/a" auto

@@ -253,6 +253,31 @@ prune() {
   done
 }
 
+# live_choices [key]: the brain names (or "none") chosen by the windows that still run, one per line, leaving out
+# window [key]. A window counts if its choice file is pid-<pid> and that process still runs with the start time
+# recorded in it (or the file records none). Windows known only by session id (sid-*) cannot be told apart from
+# finished ones, so they are not counted.
+live_choices() {
+  local f base pid name start now
+  for f in "$SES"/pid-*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    base="${f##*/}"; [ "$base" = "${1-}" ] && continue
+    pid="${base#pid-}"
+    case "$pid" in ''|0*|*[!0-9]*) continue ;; esac
+    name=""; start=""
+    { IFS= read -r name; IFS= read -r start; } < <(head -c "$CD_CHOICE_READ" -- "$f" 2>/dev/null)
+    if [ -n "$start" ]; then
+      now=$(cd_process_start "$pid"); [ -n "$now" ] && [ "$now" = "$start" ] || continue
+    else
+      ps -p "$pid" >/dev/null 2>&1 || continue
+    fi
+    printf '%s\n' "$name"
+  done
+}
+
+# windows <n> [other]: "1 window", "2 windows", "1 other window", ...
+windows() { if [ "$1" = 1 ]; then echo "1 ${2:+$2 }window"; else echo "$1 ${2:+$2 }windows"; fi; }
+
 # put_choice <file> <name> <start>: write a choice file atomically.
 put_choice() {
   local tmp
@@ -328,7 +353,7 @@ check_pointer() {
 # --- commands -----------------------------------------------------------------------------------------------------
 
 pick() {
-  local name="$1"
+  local name="$1" others
   if [ "$name" != none ]; then
     if ! cd_valid_name "$name"; then
       say_err "\"$(cd_printable "$name")\" is not a brain name. See /brain help."; return
@@ -352,6 +377,10 @@ pick() {
   printf 'This window now uses brain "%s" (%s). The hooks load it at every start, /clear and compaction in this\n' \
     "$name" "$CD_STATUS"
   printf 'window. It replaces any project STATUS loaded earlier in this session; here it is:\n\n'
+  others=$(live_choices "$(cd_window_key "")" | grep -cxF -- "$name")
+  if [ "${others:-0}" -gt 0 ]; then
+    printf 'Also attached in %s; STATUS may change under you.\n\n' "$(windows "$others" other)"
+  fi
   if [ "${CD_HOOKS:-}" = off ]; then
     echo "(CD_HOOKS=off is set in this window, so the hooks are off and will not load it.)"
   fi
@@ -524,7 +553,7 @@ remove() {
 }
 
 list() {
-  local sel s_how s_name s_subject s_refused rows rc=0 width=4 name root status problem info mark roots=""
+  local sel s_how s_name s_subject s_refused rows rc=0 width=4 name root status problem info mark roots="" live n
   cd_select_brain ""; sel=$?
   s_how="$CD_HOW"; s_name="$CD_NAME"
   s_subject="$CD_SUBJECT"; s_refused="$CD_REFUSED"
@@ -545,6 +574,7 @@ list() {
     echo "Create one: /brain new <name> [--at <folder>]. Register an existing one: /brain add <name> <folder|STATUS file>"
   else
     echo "Brains (registry: $REG):"
+    live=$(live_choices)
     while IFS=$'\037' read -r name root status problem; do [ ${#name} -gt $width ] && width=${#name}; done <<<"$rows"
     while IFS=$'\037' read -r name root status problem; do
       mark=" "
@@ -552,6 +582,8 @@ list() {
         info="not usable: $problem"
       elif cd_check_brain "$root" "$status" "$name"; then
         info="$CD_REL, $(commas "$CD_SIZE") bytes, changed $(date -r "$CD_STATUS" +%Y-%m-%d 2>/dev/null)"
+        n=$(printf '%s\n' "$live" | grep -cxF -- "$name")
+        [ "${n:-0}" -gt 0 ] && info="$info, attached in $(windows "$n")"
         roots="$roots"$'\n'"$CD_STATUS"
         [ "$sel" = 0 ] && [ "$s_name" = "$name" ] && mark="*"
       else
