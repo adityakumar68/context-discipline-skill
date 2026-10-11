@@ -233,11 +233,16 @@ check "writing a choice prunes 8-day-old choices of finished windows" eval '[ ! 
 check "... and keeps recent ones, and old ones whose window still runs" eval '[ -e "$SES/sid-recent" ] && [ -e "$SES/pid-$PPID" ]'
 check "/brain <name> records the STATUS it printed for this window (seen-pid-<pid>)" \
   eval '[ "$(head -n 1 "$SES/seen-pid-$$")" = "$HM/b/notes/STATUS.md" ]'
-printf 'x\n1 1\n' > "$SES/seen-pid-1"; old "$SES/seen-pid-1"; printf 'x\n1 1\n' > "$SES/seen-sid-new"
+sleep 0 & dead=$!; wait "$dead"
+printf 'x\n1 1 1\n' > "$SES/seen-pid-$dead"; old "$SES/seen-pid-$dead"
+printf 'x\n1 1 1\n' > "$SES/seen-sid-old"; old "$SES/seen-sid-old"; printf 'x\n1 1 1\n' > "$SES/seen-sid-new"
+printf 'x\n1 1 1\n' > "$SES/seen-pid-$PPID"; old "$SES/seen-pid-$PPID"
 bc "$HM/a" beta
-check "writing a choice prunes 8-day-old records too, keeping recent ones" \
-  eval '[ ! -e "$SES/seen-pid-1" ] && [ -e "$SES/seen-sid-new" ]'
-rm -f "$SES/seen-sid-new"
+check "writing a choice prunes 8-day-old records of finished windows, keeping recent ones" \
+  eval '[ ! -e "$SES/seen-pid-$dead" ] && [ ! -e "$SES/seen-sid-old" ] && [ -e "$SES/seen-sid-new" ]'
+check "... and an 8-day-old record of a window that still runs (its STATUS may be unchanged that long)" \
+  eval '[ -e "$SES/seen-pid-$PPID" ]'
+rm -f "$SES/seen-sid-new" "$SES/seen-pid-$PPID"
 
 # --- many windows on one brain ---------------------------------------------------------------------------------------
 # Window 1 is CLAUDE_PID=$$ (bc's default), window 2 is CLAUDE_PID=$PPID: both processes run while the tests do.

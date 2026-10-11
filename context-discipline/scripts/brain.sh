@@ -306,11 +306,15 @@ new_name_ok() {
 # --- choices ----------------------------------------------------------------------------------------------------
 
 # prune: remove choices older than 7 days, unless their window (same PID, same start) still runs, and the
-# windows' records of the STATUS they were shown (seen-*, rewritten at every start and change) older than 7 days.
+# windows' records of the STATUS they were shown (seen-*, rewritten at every start and change) older than 7 days,
+# unless their window's process still runs (a record keeps no start time; a reused PID only keeps a small file).
 prune() {
-  local f base start now
+  local f base start now pid
   for f in "$SES"/seen-pid-* "$SES"/seen-sid-*; do
-    [ -f "$f" ] && [ ! -L "$f" ] && [ -n "$(find "$f" -mtime +6 2>/dev/null)" ] && rm -f -- "$f"
+    [ -f "$f" ] && [ ! -L "$f" ] && [ -n "$(find "$f" -mtime +6 2>/dev/null)" ] || continue
+    pid="${f##*/seen-pid-}"
+    case "$pid" in */*|''|0*|*[!0-9]*) ;; *) ps -p "$pid" >/dev/null 2>&1 && continue ;; esac
+    rm -f -- "$f"
   done
   for f in "$SES"/pid-* "$SES"/sid-*; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
