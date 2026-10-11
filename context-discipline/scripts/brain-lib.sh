@@ -1,16 +1,13 @@
 # brain-lib.sh -- shared by the context-discipline hooks (brain-hook.sh, compact-log.sh, ctx-nudge.sh) and the
-# /brain command (brain.sh). Sourced, not run. Picks a session's project brain with one set of rules, so every
-# hook agrees on which brain a session uses (cd_select_brain), first match wins:
+# /brain command (brain.sh). Sourced, not run. A brain belongs to a Claude Code session, never to a folder: every
+# hook picks the session's brain with one set of rules (cd_select_brain), first match wins:
 #   1. the choice made with /brain <name> or /brain none in this Claude Code window: the file
 #      <config>/brain-sessions/<key>, where <config> is $CLAUDE_CONFIG_DIR or ~/.claude and <key> is
 #      pid-$CLAUDE_PID (the Claude Code process, so the choice survives /clear and compaction), else
 #      sid-<session id>;
 #   2. CD_BRAIN=<name> or CD_BRAIN=none in the environment;
-#   3. the folder walk-up: from the session's cwd to the nearest "<dir>/.claude/brain" pointer, stopping before
-#      $HOME and "/" (so ~/.claude, the global config, is never read as a brain). The pointer's first non-empty
-#      line not starting with "#" names the STATUS file, relative to <dir>; only the pointer's first 4,096 bytes
-#      are read, and that line may be at most 1,024 bytes (a cloned repo's pointer is untrusted: a huge line would
-#      otherwise stall every hook).
+#   3. else no brain. The session's folder plays no part: the hooks never read a .claude/brain pointer (only
+#      /brain add reads one, to register an old folder brain; cd_find_brain and cd_check_pointer are for that).
 # A name is looked up in the registry <config>/brains.json:
 #   {"version": 2, "brains": {"<name>": {"dir": "<abs brain folder>", "status": "<STATUS file, relative to dir>"}}}
 # A version 1 registry ({"root": "<project folder>", "status": "<abs STATUS file>"}) is read as if each entry's dir
@@ -42,20 +39,12 @@ sys.stdout.write(v if isinstance(v, str) else "")' "$2" 2>/dev/null
   fi
 }
 
-# cd_session_cwd <json>: print the session's working directory: the input's "cwd", else $CLAUDE_PROJECT_DIR,
-# else $PWD. Fails if the input is not a JSON object (Claude Code always sends one). Empty input, or no JSON
-# parser at all, uses the fallbacks.
-cd_session_cwd() {
-  local cwd="" rc=0
-  if [ -n "$1" ]; then
-    cwd=$(cd_json_get "$1" cwd) || rc=$?
-    if [ "$rc" != 0 ] && { command -v jq || command -v python3; } >/dev/null 2>&1; then
-      return 1
-    fi
-  fi
-  [ -z "$cwd" ] && cwd="${CLAUDE_PROJECT_DIR:-}"
-  [ -z "$cwd" ] && cwd="$PWD"
-  printf '%s\n' "$cwd"
+# cd_input_ok <json>: false if the hook input is not a JSON object (Claude Code always sends one). Empty input (a
+# hook run by hand, or by /brain) and a machine with neither jq nor python3 count as fine.
+cd_input_ok() {
+  [ -n "$1" ] || return 0
+  cd_json_get "$1" cwd >/dev/null 2>&1 && return 0
+  ! { command -v jq || command -v python3; } >/dev/null 2>&1
 }
 
 # cd_find_brain <cwd>: walk up from <cwd> to the nearest <dir>/.claude/brain, stopping before $HOME and "/".
@@ -410,30 +399,25 @@ cd_check_brain() {
   cd_check_status "$CD_DIR/$2"
 }
 
-# cd_select_brain <json>: which brain this session uses (the rules at the top of this file), for a hook's input
-# (or "" outside a hook: then the cwd is $CLAUDE_PROJECT_DIR, else $PWD). Sets CD_HOW ("/brain", "CD_BRAIN" or
-# "folder"), CD_NAME (the chosen name, "none", or "" for the folder walk-up), and on success what cd_check_status
-# sets plus CD_ROOT (and CD_POINTER for the walk-up). From here on LC_ALL=C.
+# cd_select_brain <json>: which brain this session uses (the rules at the top of this file), for a hook's input (or
+# "" outside a hook). Sets CD_HOW ("/brain" or "CD_BRAIN"; "" when nothing was chosen), CD_NAME (the chosen name,
+# "none", or ""), and on success what cd_check_brain sets. From here on LC_ALL=C.
 # Returns 0 if a brain is selected and accepted; 1 if it is refused, with CD_SUBJECT and CD_REFUSED set (say
-# "<subject> <reason>"); 2 if there is no brain: none chosen, no pointer found, the input is not a JSON object,
-# CD_HOOKS=off, or the project cannot be read.
+# "<subject> <reason>"); 2 if the session has no brain (none chosen, or nothing chosen); 3 if the hooks must do
+# nothing at all (CD_HOOKS=off, or the input is not a JSON object).
 cd_select_brain() {
-  local cwd key name
+  local key name
   CD_HOW=""; CD_NAME=""; CD_SUBJECT=""; CD_REFUSED=""; CD_ROOT=""; CD_DIR=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""
   CD_POINTER=""
-  [ "${CD_HOOKS:-}" = off ] && return 2
-  cwd=$(cd_session_cwd "$1") || return 2
+  [ "${CD_HOOKS:-}" = off ] && return 3
+  cd_input_ok "$1" || return 3
   LC_ALL=C; export LC_ALL
   if key=$(cd_window_key "$1") && name=$(cd_read_choice "$key"); then
     CD_HOW=/brain
   elif [ -n "${CD_BRAIN:-}" ]; then
     CD_HOW=CD_BRAIN; name="$CD_BRAIN"
   else
-    CD_HOW=folder
-    cd_find_brain "$cwd" || return 2
-    CD_SUBJECT="$CD_POINTER"
-    cd_check_pointer
-    return
+    return 2
   fi
   CD_NAME="$name"
   [ "$name" = none ] && return 2
@@ -445,4 +429,19 @@ cd_select_brain() {
   CD_SUBJECT="brain \"$name\" (chosen with $CD_HOW)"
   cd_registry_get "$name" || return 1
   cd_check_brain "$CD_REG_DIR" "$CD_REG_STATUS" "$name"
+}
+
+# cd_brain_names: the registered names (only those that are brain names), one per line. Fails if the registry
+# cannot be read (or python3 is missing); prints nothing if there is no registry or it is empty.
+cd_brain_names() {
+  local reg out
+  reg="$(cd_config_dir)/brains.json"
+  [ -e "$reg" ] || [ -L "$reg" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 1
+  out=$(python3 -I -c "$CD_REGISTRY_PY"$'\n'"$CD_PY_MAIN" list "$reg" 2>/dev/null) || return 1
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out" | while IFS=$'\037' read -r name _ _ problem; do
+    cd_valid_name "$name" && printf '%s\n' "$name"
+  done
+  return 0
 }

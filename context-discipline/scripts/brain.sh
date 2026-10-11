@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # brain.sh -- the /brain command of the context-discipline skill: list, pick and register named project brains.
 #
-#   brain.sh                        list the registered brains (project folder, STATUS size and date), mark the
-#                                   one this window uses, and show an unregistered folder brain found from here
+#   brain.sh                        list the registered brains (folder, STATUS size and date), mark the one this
+#                                   window uses, and name an old .claude/brain pointer in the current folder
 #   brain.sh <name>                 use that brain in this Claude Code window, and print its STATUS
 #   brain.sh none                   use no brain in this window
-#   brain.sh auto                   drop this window's choice: the default applies again (CD_BRAIN, else the folder)
 #   brain.sh add <name> [folder]    register the brain of <folder> (default: the current folder)
 #   brain.sh new <name> <folder>    set up a brain in <folder> with init-brain.sh, then register it
 #   brain.sh rename <old> <new>     rename a registered brain (registry only)
@@ -40,7 +39,6 @@ usage() {
 usage: /brain                        list the brains; * marks the one this window uses
        /brain <name>                 use that brain in this window (prints its STATUS)
        /brain none                   use no brain in this window
-       /brain auto                   back to the default: CD_BRAIN if set, else the folder's brain
        /brain add <name> [folder]    register the brain of a folder (default: the current one)
        /brain new <name> <folder>    set up a brain in a folder, then register it
        /brain rename <old> <new>     rename a registered brain (registry only)
@@ -243,41 +241,6 @@ write_choice() {
 
 # --- commands -----------------------------------------------------------------------------------------------------
 
-# auto: drop this window's choice, then say what the default gives (and print that STATUS, as /brain <name> does).
-auto() {
-  local key file
-  if ! key=$(cd_window_key ""); then
-    say_err "cannot tell which Claude Code window this is: neither CLAUDE_PID nor CLAUDE_CODE_SESSION_ID is set." \
-      "Run /brain inside Claude Code."
-    return
-  fi
-  file="$SES/$key"
-  if [ -e "$file" ] || [ -L "$file" ]; then
-    if [ -d "$file" ] && [ ! -L "$file" ]; then say_err "cannot remove $file (a folder)."; return; fi
-    rm -f -- "$file" 2>/dev/null || { say_err "cannot remove $file."; return; }
-  fi
-  cd_select_brain ""
-  case $? in
-    0)
-      if [ -n "$CD_NAME" ]; then
-        printf 'This window now uses the default: brain "%s" (from CD_BRAIN, %s).\n' "$CD_NAME" "$CD_STATUS"
-      else
-        printf 'This window now uses the default: the folder brain %s (%s).\n' "$CD_ROOT" "$CD_STATUS"
-      fi
-      printf 'It replaces any project STATUS loaded earlier in this session; here it is:\n\n'
-      printf '{}' | CD_HOOKS= bash "$here/brain-hook.sh" ;;
-    1)
-      echo "This window now uses the default, which loads no project brain: $CD_SUBJECT $CD_REFUSED."
-      echo "Disregard any project STATUS loaded earlier in this session." ;;
-    *)
-      if [ "${CD_HOOKS:-}" = off ]; then echo "This window now uses the default; the hooks are off (CD_HOOKS=off)."
-      elif [ "$CD_NAME" = none ]; then echo "This window now uses the default, which is no project brain (CD_BRAIN=none)."
-      else echo "This window now uses the default, which is no project brain: CD_BRAIN is not set and there is no .claude/brain above this folder."
-      fi
-      echo "Disregard any project STATUS loaded earlier in this session." ;;
-  esac
-}
-
 pick() {
   local name="$1"
   if [ "$name" != none ]; then
@@ -434,7 +397,7 @@ list() {
     rows=""; rc=5
   fi
   if [ "$rc" = 5 ]; then
-    echo "Named brains need python3, which is not installed (the registry is $REG); the folder walk-up still works."
+    echo "Brains need python3, which is not installed (the registry is $REG); CD_BRAIN cannot load one either."
   elif [ "$rc" != 0 ]; then
     echo "The registry $REG ${rows:-cannot be read}; fix it or move it aside."
     rows=""
@@ -461,17 +424,19 @@ list() {
     done <<<"$rows"
   fi
 
-  # A folder brain found from here that is not registered.
-  if CD_HOOKS= cd_find_brain "$PWD"; then
+  # An old .claude/brain pointer in the current folder (the hooks no longer read pointers) whose brain is not
+  # registered: say how to register it.
+  if [ -f "$PWD/.claude/brain" ]; then
+    CD_POINTER="$PWD/.claude/brain"; CD_ROOT=$(pwd -P)
     LC_ALL=C; export LC_ALL
     if cd_check_pointer; then
-      here_root="$CD_ROOT"; here_rel="$CD_REL"
       case "$roots"$'\n' in
         *$'\n'"$CD_STATUS"$'\n'*) ;;
-        *) echo "Folder brain here, not registered: $here_root ($(cd_printable "$here_rel" 4096)). Register it: /brain add <name>" ;;
+        *) echo "Old pointer here: $CD_POINTER names $(cd_printable "$CD_STATUS" 4096); it is no longer read." \
+             "Register its brain: /brain add <name>" ;;
       esac
     else
-      echo "Folder brain here: $CD_POINTER ${CD_REFUSED:-cannot be read}, so the hooks ignore it."
+      echo "Old pointer here: $CD_POINTER (no longer read) ${CD_REFUSED:-cannot be read}."
     fi
   fi
 
@@ -479,17 +444,15 @@ list() {
     echo "This window has the hooks off (CD_HOOKS=off), so they load no brain."
   elif [ "$sel" = 0 ] && [ -n "$s_name" ]; then
     echo "This window uses brain \"$s_name\" (chosen with $s_how)."
-  elif [ "$sel" = 0 ]; then
-    echo "This window uses the folder brain $s_root (found from $PWD)."
   elif [ "$s_name" = none ]; then
     if [ "$s_how" = /brain ]; then echo "This window uses no brain (chosen with /brain none)."
     else echo "This window uses no brain (chosen with CD_BRAIN=none)."; fi
   elif [ "$sel" = 1 ]; then
     echo "This window uses no brain: $s_subject $s_refused."
   else
-    echo "This window uses no brain: none chosen with /brain, CD_BRAIN not set, and no .claude/brain above this folder."
+    echo "This window uses no brain: none chosen with /brain, and CD_BRAIN is not set."
   fi
-  echo "Pick: /brain <name>, /brain none, /brain auto (the default). Register: /brain add <name> [folder], /brain new <name> <folder>. Also: rename, remove, help."
+  echo "Pick: /brain <name>, /brain none. Register: /brain add <name> [folder], /brain new <name> <folder>. Also: rename, remove, help."
 }
 
 usage_err() { echo "brain: wrong arguments."; usage; }
@@ -517,7 +480,8 @@ case "${1-}" in
   "") if [ $# -le 1 ]; then list; else usage_err; fi ;;
   help|-h|--help) usage ;;
   list) if [ $# = 1 ]; then list; else usage_err; fi ;;
-  auto) if [ $# = 1 ]; then auto; else usage_err; fi ;;
+  auto) say_err "/brain auto is gone: a brain belongs to a window, not a folder, so there is no default to go back to." \
+         "/brain none detaches this window; /brain <name> attaches a brain." ;;
   add) if [ $# = 2 ] || [ $# = 3 ]; then add "$2" "${3-}"; else usage_err; fi ;;
   new) if [ $# = 3 ]; then new "$2" "$3"; else usage_err; fi ;;
   rename) if [ $# = 3 ]; then rename "$2" "$3"; else usage_err; fi ;;

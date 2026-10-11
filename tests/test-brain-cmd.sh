@@ -105,13 +105,15 @@ check "list: one row per brain with its folder, STATUS file, size and date" \
   eval 'hasline "$out" "^  alpha +$HM/a +STATUS.md, 21 bytes, changed $TODAY\$" && hasline "$out" "^  beta +$HM/b/notes +STATUS.md, 21 bytes, changed $TODAY\$"'
 check "list in a plain folder: this window uses no brain, nothing marked" \
   eval 'has "$out" "This window uses no brain" && ! hasline "$out" "^\* "'
-bc "$HM/a/src"
-check "list inside a registered folder brain: its row is marked, says it was found from the folder" \
-  eval 'hasline "$out" "^\* alpha " && has "$out" "This window uses the folder brain $HM/a" && ! has "$out" "not registered"'
+bc "$HM/a"
+check "list in a folder whose old pointer names a registered brain: nothing marked, no brain, no pointer line" \
+  eval '! hasline "$out" "^\* " && has "$out" "This window uses no brain" && ! has "$out" "pointer"'
 mkdir -p "$HM/d/.claude" "$HM/d/deep"; printf 'status-of-d\n' > "$HM/d/STATUS.md"; echo STATUS.md > "$HM/d/.claude/brain"
+bc "$HM/d"
+check "list in a folder with an old pointer to an unregistered brain: says it is no longer read, and /brain add <name>" \
+  eval 'has "$out" "$HM/d/.claude/brain" && has "$out" "no longer read" && has "$out" "/brain add <name>" && ! hasline "$out" "^\* "'
 bc "$HM/d/deep"
-check "list inside an unregistered folder brain: shows it with the hint /brain add <name>" \
-  eval 'has "$out" "Folder brain here, not registered: $HM/d" && has "$out" "/brain add <name>"'
+check "list in a subfolder of it: no pointer line (only the current folder is looked at)" eval '! has "$out" "pointer"'
 bc "$HM/plain" CD_BRAIN=beta
 check "list with CD_BRAIN=beta: beta marked, says it was chosen with CD_BRAIN" \
   eval 'hasline "$out" "^\* beta " && has "$out" "This window uses brain \"beta\" (chosen with CD_BRAIN)"'
@@ -134,20 +136,22 @@ check "/brain beta: the choice file is pid-<CLAUDE_PID>, holding the name and th
   eval '[ "$(head -n 1 "$SES/pid-$$")" = beta ] && [ "$(sed -n 2p "$SES/pid-$$")" = "$(. "$S/brain-lib.sh"; cd_process_start $$)" ]'
 check "the choices folder is private (mode 700)" eval '[ "$(ls -ld "$SES" | cut -c1-10)" = drwx------ ]'
 check "the hooks now use beta in this window, even inside project a" eval 'has "$(hookout "$HM/a")" status-of-b'
-check "another window is not affected" eval 'has "$(hookout "$HM/a" CLAUDE_PID=1)" status-of-a'
+check "another window is not affected (it has no brain)" \
+  eval 'o=$(hookout "$HM/a" CLAUDE_PID=1); ! has "$o" status-of && has "$o" "No brain attached"'
 bc "$HM/a"
 check "list after /brain beta: beta marked, chosen with /brain" \
   eval 'hasline "$out" "^\* beta " && has "$out" "This window uses brain \"beta\" (chosen with /brain)"'
 bc "$HM/a" none
 check "/brain none: says so, exit 0" eval '[ $rc = 0 ] && has "$out" "This window now uses no project brain"'
-check "/brain none: the hooks print nothing in project a" eval '[ -z "$(hookout "$HM/a")" ]'
+check "/brain none: the hooks print only the no-brain hint, even in a folder with a pointer" \
+  eval 'o=$(hookout "$HM/a"); ! has "$o" status-of && has "$o" "No brain attached"'
 bc "$HM/a"
 check "list after /brain none: says no brain, chosen with /brain none" has "$out" "This window uses no brain (chosen with /brain none)"
 # The recorded start time must not depend on the locale or time zone of whoever writes or reads it.
 LOC=$(locale -a 2>/dev/null | grep -m1 -E '^(fr_FR|de_DE)\.(UTF-8|utf8)$')
 bc "$HM/a" ${LOC:+LC_ALL=$LOC} TZ=Pacific/Kiritimati -- none
 check "/brain none written under another locale (${LOC:-none found}) and time zone: the hooks still honour it" \
-  eval '[ -z "$(hookout "$HM/a")" ]'
+  eval 'o=$(hookout "$HM/a" CD_BRAIN=beta); ! has "$o" status-of'
 bc "$HM/a" ${LOC:+LC_ALL=$LOC} TZ=Pacific/Kiritimati -- alpha
 check "/brain alpha written under another locale and time zone: the hooks load alpha" \
   eval 'has "$(hookout "$HM/a" TZ=UTC)" "(brain \"alpha\", chosen with /brain)"'
@@ -180,26 +184,15 @@ bc "$HM/a" beta
 check "writing a choice prunes 8-day-old choices of finished windows" eval '[ ! -e "$SES/pid-1" ] && [ ! -e "$SES/sid-old" ]'
 check "... and keeps recent ones, and old ones whose window still runs" eval '[ -e "$SES/sid-recent" ] && [ -e "$SES/pid-$PPID" ]'
 
-# --- auto: drop this window's choice, so the default applies again ---------------------------------------------------
+# --- /brain auto is gone: there is no folder default to go back to ------------------------------------------------
+cp "$SES/pid-$$" "$T/choice.before"
 bc "$HM/a" auto
-check "/brain auto: removes this window's choice file, exit 0" eval '[ $rc = 0 ] && [ ! -e "$SES/pid-$$" ]'
-check "/brain auto inside a folder brain: says the default is that folder brain and prints its STATUS" \
-  eval 'has "$out" "default" && has "$out" "folder brain $HM/a" && has "$out" status-of-a'
-check "after /brain auto the hooks use the folder walk-up again" eval 'has "$(hookout "$HM/a")" status-of-a'
-bc "$HM/plain" CD_BRAIN=beta -- auto
-check "/brain auto with CD_BRAIN=beta: says beta (from CD_BRAIN) and prints its STATUS" \
-  eval 'has "$out" "brain \"beta\"" && has "$out" CD_BRAIN && has "$out" status-of-b'
-bc "$HM/plain" auto
-check "/brain auto with no default brain: says so, and to disregard an earlier STATUS" \
-  eval 'has "$out" "no project brain" && has "$out" "isregard" && ! has "$out" status-of'
-bc "$HM/plain" auto
-check "/brain auto twice: still fine" eval '[ $rc = 0 ] && ! hasline "$out" "^brain: "'
-out=$(cd "$HM/a" && env HOME="$HM" bash "$B" auto 2>&1)
-check "/brain auto outside Claude Code (no CLAUDE_PID): refused, says why" eval 'has "$out" "brain: " && has "$out" CLAUDE_PID'
+check "/brain auto: says it is gone and points to /brain none and /brain <name>, choice unchanged, exit 0" \
+  eval '[ $rc = 0 ] && has "$out" "brain: " && has "$out" "/brain none" && has "$out" "/brain <name>" && cmp -s "$SES/pid-$$" "$T/choice.before"'
 bc "$HM/plain" help
-check "help shows /brain auto" has "$out" "/brain auto"
+check "help no longer shows /brain auto" eval '! has "$out" "/brain auto"'
 bc "$HM/plain"
-check "the list's closing line names /brain auto" has "$out" "/brain auto"
+check "the list's closing line no longer names /brain auto" eval '! has "$out" "/brain auto"'
 bc "$HM/a" beta
 
 # --- rename and remove: registry only --------------------------------------------------------------------------------

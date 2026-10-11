@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for ctx-nudge.sh (UserPromptSubmit hook): in brain projects it measures the session's context from the
+# Tests for ctx-nudge.sh (UserPromptSubmit hook): when the session has a brain it measures its context from the
 # transcript and, at 40% of the window and every further 15%, adds a short note (additionalContext) asking
 # Claude to update STATUS at the next natural break. Once per step per session; never blocks.
 # Usage: bash tests/test-ctx-nudge.sh
@@ -19,9 +19,17 @@ ok() { echo "PASS $1"; pass=$((pass + 1)); }
 no() { echo "FAIL $1"; fail=$((fail + 1)); }
 check() { local name="$1"; shift; if "$@"; then ok "$name"; else no "$name"; fi; }
 
-HM="$T/home"; TS="$T/tmp"; mkdir -p "$HM" "$TS"
+HM="$T/home"; TS="$T/tmp"; mkdir -p "$HM/.claude" "$TS"
 P="$HM/p"; mkdir -p "$P/.claude" "$P/docs" "$P/src"
-printf '# STATUS\n' > "$P/docs/STATUS.md"; echo docs/STATUS.md > "$P/.claude/brain"
+printf '# STATUS\n' > "$P/docs/STATUS.md"; echo docs/STATUS.md > "$P/.claude/brain"   # an old pointer: never read
+# regset [<name> <dir>]...: the registry holds brain p (folder $P/docs) and the brains given, each STATUS.md.
+regset() {
+  python3 -I -c 'import json, sys
+r = ["p", sys.argv[2]] + sys.argv[3:]
+json.dump({"version": 2, "brains": {r[i]: {"dir": r[i + 1], "status": "STATUS.md"} for i in range(0, len(r), 2)}},
+          open(sys.argv[1], "w"))' "$HM/.claude/brains.json" "$P/docs" "$@"
+}
+regset
 TR="$T/tr"; mkdir -p "$TR"
 
 # gen <file> <record>...: write a transcript, one compact JSON line per record (as Claude Code writes them).
@@ -81,7 +89,8 @@ with open(out, "w") as f:
 PY
 }
 
-# run <cwd> <transcript> <session_id> [VAR=value...]: run the hook with a clean environment. Sets out and rc.
+# run <cwd> <transcript> <session_id> [VAR=value...]: run the hook with a clean environment and brain p
+# (CD_BRAIN=p unless overridden). Sets out and rc.
 # Session id "-" leaves the field out; transcript "-" leaves transcript_path out.
 run() {
   local cwd="$1" tp="$2" sid="$3"; shift 3
@@ -93,7 +102,7 @@ for k in ("session_id", "transcript_path"):
     if d[k] == "-": del d[k]
 print(json.dumps(d))' "$cwd" "$tp" "$sid")
   out=$(printf '%s' "$in" | env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u CD_CTX_WINDOW \
-    -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_CODE_DISABLE_1M_CONTEXT HOME="$HM" TMPDIR="$TS" "$@" \
+    -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_CODE_DISABLE_1M_CONTEXT HOME="$HM" TMPDIR="$TS" CD_BRAIN=p "$@" \
     perl -e 'alarm shift; exec @ARGV' 10 bash "$N" 2>&1)    # a hung hook is killed after 10 s (rc 142)
   rc=$?
 }
@@ -238,7 +247,7 @@ rm -f "$P/.claude/settings.local.json"
 gen "$TR/w" a:200000:claude-opus-5-5; run "$P" "$TR/w" "sess-$((++k))"
 check "project settings.json wins over user settings" eval 'nudged "40%" && has "$(note)" "500,000"'
 rm -f "$P/.claude/settings.json" "$US"
-mkdir -p "$T/cfg"; echo '{"autoCompactWindow": 600000}' > "$T/cfg/settings.json"
+mkdir -p "$T/cfg"; echo '{"autoCompactWindow": 600000}' > "$T/cfg/settings.json"; cp "$HM/.claude/brains.json" "$T/cfg/"
 gen "$TR/w" a:240000:claude-opus-5-5; run "$P" "$TR/w" "sess-$((++k))" CLAUDE_CONFIG_DIR="$T/cfg"
 check "user settings are read from \$CLAUDE_CONFIG_DIR when it is set" eval 'nudged "40%" && has "$(note)" "600,000"'
 echo '{"autoCompactWindow": ' > "$HM/.claude/settings.json"
@@ -276,26 +285,27 @@ check "CLAUDE_CODE_DISABLE_1M_CONTEXT=1: a 1M model counts as 200K" eval 'nudged
 gen "$TR/m" "a:450000:claude-opus-4-6"; run "$P" "$TR/m" "sess-$((++k))"
 check "context above the guessed 200K window: the window must be 1M (45%)" eval 'nudged "45%" && has "$(note)" "1,000,000"'
 
-# --- no note outside brain projects, and bad input never breaks anything --------------------------------------------
+# --- no note without a brain, and bad input never breaks anything ---------------------------------------------------
 mkdir -p "$HM/plain/x"; gen "$TR/x" a:150000
-run "$HM/plain/x" "$TR/x" "sess-$((++k))"
-check "no brain pointer: no output even at 75%" quiet
+run "$HM/plain/x" "$TR/x" "sess-$((++k))" CD_BRAIN=
+check "no brain chosen: no output even at 75%" quiet
+run "$P/src" "$TR/x" "sess-$((++k))" CD_BRAIN=
+check "no brain chosen, inside a folder with an old .claude/brain pointer: no output" quiet
 run "$P" "$TR/x" "sess-$((++k))" CD_HOOKS=off
-check "CD_HOOKS=off: no output even at 75% in a brain project" quiet
-mkdir -p "$HM/refused/.claude"; echo "$P/docs/STATUS.md" > "$HM/refused/.claude/brain"
-run "$HM/refused" "$TR/x" "sess-$((++k))"
-check "pointer the SessionStart hook refuses: no output" quiet
+check "CD_HOOKS=off: no output even at 75% with a brain" quiet
+regset gone "$HM/gone"
+run "$HM/plain/x" "$TR/x" "sess-$((++k))" CD_BRAIN=gone
+check "a brain the SessionStart hook refuses (its folder is gone): no output" quiet
+regset
 
-# --- named brains: the same choice as the SessionStart hook (brain-lib.sh's cd_select_brain) -----------------------
-NB="$HM/named"; mkdir -p "$NB/.claude" "$HM/.claude"; echo s > "$NB/STATUS.md"; echo STATUS.md > "$NB/.claude/brain"
-python3 -I -c 'import json, sys
-json.dump({"version": 1, "brains": {"nb": {"root": sys.argv[2], "status": sys.argv[2] + "/STATUS.md"}}}, open(sys.argv[1], "w"))' \
-  "$HM/.claude/brains.json" "$NB"
+# --- the brain, as the SessionStart hook picks it (brain-lib.sh's cd_select_brain) ---------------------------------
+NB="$HM/named"; mkdir -p "$NB"; echo s > "$NB/STATUS.md"
+regset nb "$NB"
 run "$HM/plain/x" "$TR/x" "sess-$((++k))" CD_BRAIN=nb
 check "CD_BRAIN=nb, session in a plain folder: the note names nb's STATUS" \
   eval 'nudged "75%" && has "$(note)" "update $NB/STATUS.md,"'
 run "$P/src" "$TR/x" "sess-$((++k))" CD_BRAIN=none
-check "CD_BRAIN=none inside a brain project: no output" quiet
+check "CD_BRAIN=none: no output" quiet
 run "$P/src" "$TR/x" "sess-$((++k))" CD_BRAIN=nope
 check "CD_BRAIN names an unregistered brain: no output" quiet
 mkdir -p "$HM/.claude/brain-sessions"; printf 'none\n\n' > "$HM/.claude/brain-sessions/pid-$$"
@@ -303,9 +313,9 @@ run "$P/src" "$TR/x" "sess-$((++k))" CLAUDE_PID=$$ CD_BRAIN=nb
 check "/brain none in this window: no output, even with CD_BRAIN set" quiet
 printf 'nb\n\n' > "$HM/.claude/brain-sessions/pid-$$"
 run "$P/src" "$TR/x" "sess-$((++k))" CLAUDE_PID=$$
-check "/brain nb in this window, inside another brain project: the note names nb's STATUS" \
+check "/brain nb in this window (CD_BRAIN=p too): the note names nb's STATUS" \
   eval 'nudged "75%" && has "$(note)" "update $NB/STATUS.md,"'
-rm -rf "$HM/.claude/brain-sessions" "$HM/.claude/brains.json"
+rm -rf "$HM/.claude/brain-sessions"; regset
 gen "$TR/g" bad a:80000 bad u cut; run "$P" "$TR/g" "sess-$((++k))"
 check "malformed lines and a truncated last line: the last good call counts" nudged "40%"
 printf '' > "$TR/empty"; run "$P" "$TR/empty" "sess-$((++k))"
@@ -322,7 +332,8 @@ out=$(cd "$P" && printf '{bad json' | env -u CLAUDE_PROJECT_DIR HOME="$HM" TMPDI
 check "malformed hook input: exit 0, no output" quiet
 gen "$TR/l" a:80000; mkdir -p "$T/elsewhere"; TS2="$T/tmp2"; mkdir -p "$TS2"; ln -s "$T/elsewhere" "$TS2/context-discipline"
 out=$(python3 -I -c 'import json,sys; print(json.dumps({"session_id": "x", "transcript_path": sys.argv[1], "cwd": sys.argv[2]}))' "$TR/l" "$P" \
-  | env -u CLAUDE_PROJECT_DIR -u CD_CTX_WINDOW -u CLAUDE_CODE_AUTO_COMPACT_WINDOW HOME="$HM" TMPDIR="$TS2" bash "$N" 2>&1); rc=$?
+  | env -u CLAUDE_PROJECT_DIR -u CD_CTX_WINDOW -u CLAUDE_CODE_AUTO_COMPACT_WINDOW HOME="$HM" TMPDIR="$TS2" CD_BRAIN=p \
+  bash "$N" 2>&1); rc=$?
 check "state folder is a symlink: no note, nothing written through it" eval 'quiet && [ -z "$(ls -A "$T/elsewhere")" ]'
 
 # --- speed: a 60 MB transcript --------------------------------------------------------------------------------------

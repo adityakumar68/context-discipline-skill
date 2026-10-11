@@ -118,22 +118,24 @@ P="$H/work/notes-app"; mkdir -p "$P/src/deep"
 inst_out=$(bash "$C/skills/context-discipline/scripts/init-brain.sh" "$P"); rc=$?
 check "chain: installed init-brain.sh sets up the brain" eval '[ "$rc" = 0 ] && [ -f "$P/STATUS.md" ] && [ -f "$P/.claude/brain" ]'
 echo "chain-marker-4711" >> "$P/STATUS.md"
+reg_out=$(cd "$H" && env -u CLAUDE_CONFIG_DIR HOME="$H" CLAUDE_PID=$$ bash "$C/skills/context-discipline/scripts/brain.sh" add notes "$P" 2>&1)
+check "chain: the installed brain.sh registers it" eval 'printf "%s" "$reg_out" | grep -q "Registered brain \"notes\""'
 cmd=$(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print([h["command"] for e in d["hooks"]["SessionStart"] if "matcher" not in e for h in e["hooks"]][0])' "$C/settings.json")
-hook_out=$(printf '{"cwd": "%s", "source": "compact"}' "$P/src/deep" | HOME="$H" bash -c "$cmd"); rc=$?
-check "chain: the settings.json command, run from a project subfolder, prints STATUS" \
+hook_out=$(printf '{"cwd": "%s", "source": "compact"}' "$P/src/deep" | HOME="$H" CD_BRAIN=notes bash -c "$cmd"); rc=$?
+check "chain: the settings.json command, with CD_BRAIN=notes, prints STATUS" \
   eval '[ "$rc" = 0 ] && printf "%s" "$hook_out" | grep -q chain-marker-4711'
-check "chain: hook output ends with the 'Project brain loaded from' line" \
-  eval 'printf "%s\n" "$hook_out" | tail -n 1 | grep -qF "(Project brain loaded from $P/STATUS.md."'
+check "chain: hook output ends with the line naming the STATUS it loaded" \
+  eval 'printf "%s\n" "$hook_out" | tail -n 1 | grep -qF "loaded from $P/STATUS.md"'
 cmd_of() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"][sys.argv[2]][0]["hooks"][0]["command"])' "$C/settings.json" "$1"; }
 printf '{"cwd": "%s", "session_id": "chain123", "trigger": "manual", "compact_summary": "chain-summary-4712"}' "$P/src/deep" \
-  | env -u CLAUDE_PROJECT_DIR HOME="$H" bash -c "$(cmd_of PostCompact)"; rc=$?
-check "chain: the PostCompact command saves the summary in the project's .claude/compactions/" \
-  eval '[ "$rc" = 0 ] && grep -rq chain-summary-4712 "$P/.claude/compactions"'
+  | env -u CLAUDE_PROJECT_DIR HOME="$H" CD_BRAIN=notes bash -c "$(cmd_of PostCompact)"; rc=$?
+check "chain: the PostCompact command saves the summary in <config>/brain-logs/notes/" \
+  eval '[ "$rc" = 0 ] && grep -rq chain-summary-4712 "$C/brain-logs/notes"'
 check "chain: installed init-brain.sh put .claude/compactions/ in the project's .gitignore" grep -qx '.claude/compactions/' "$P/.gitignore"
 printf '%s\n' '{"type":"assistant","isSidechain":false,"uuid":"a","message":{"id":"m","model":"claude-opus-4-6","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":79990}}}' > "$ROOT/chain.jsonl"
 mkdir -p "$ROOT/chain-tmp"
 nudge_out=$(printf '{"cwd": "%s", "session_id": "chain", "transcript_path": "%s"}' "$P/src/deep" "$ROOT/chain.jsonl" \
-  | env -u CLAUDE_PROJECT_DIR -u CD_CTX_WINDOW -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_CONFIG_DIR HOME="$H" TMPDIR="$ROOT/chain-tmp" bash -c "$(cmd_of UserPromptSubmit)"); rc=$?
+  | env -u CLAUDE_PROJECT_DIR -u CD_CTX_WINDOW -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_CONFIG_DIR HOME="$H" TMPDIR="$ROOT/chain-tmp" CD_BRAIN=notes bash -c "$(cmd_of UserPromptSubmit)"); rc=$?
 check "chain: the UserPromptSubmit command adds the context note at 40%" \
   eval '[ "$rc" = 0 ] && printf "%s" "$nudge_out" | grep -q "additionalContext" && printf "%s" "$nudge_out" | grep -q "40%"'
 
@@ -228,9 +230,12 @@ env HOME="$H7" CLAUDE_CONFIG_DIR="$CD" bash "$INSTALL" >/dev/null 2>&1; rc=$?
 check "CLAUDE_CONFIG_DIR (with a space): installs there, not in ~/.claude" \
   eval '[ "$rc" = 0 ] && [ -d "$CD/skills/context-discipline" ] && [ ! -e "$H7/.claude" ]'
 cmd=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"]["SessionStart"][0]["hooks"][0]["command"])' "$CD/settings.json")
-mkdir -p "$H7/proj/.claude"; echo STATUS.md > "$H7/proj/.claude/brain"; echo "space-marker" > "$H7/proj/STATUS.md"
+mkdir -p "$H7/proj"; echo "space-marker" > "$H7/proj/STATUS.md"
+python3 -I -c 'import json, sys
+json.dump({"version": 2, "brains": {"sp": {"dir": sys.argv[2], "status": "STATUS.md"}}}, open(sys.argv[1], "w"))' \
+  "$CD/brains.json" "$H7/proj"
 check "CLAUDE_CONFIG_DIR (with a space): the hook command is quoted correctly and runs" \
-  eval 'printf "{\"cwd\": \"%s\"}" "$H7/proj" | HOME="$H7" bash -c "$cmd" | grep -q space-marker'
+  eval 'printf "{\"cwd\": \"%s\"}" "$H7/proj" | HOME="$H7" CLAUDE_CONFIG_DIR="$CD" CD_BRAIN=sp bash -c "$cmd" | grep -q space-marker'
 out=$(inst "$H6" --help 2>&1); rc=$?
 check "-h/--help: exit 0 and prints usage" eval '[ "$rc" = 0 ] && printf "%s" "$out" | grep -q "^Usage: ./install.sh"'
 inst "$H6" --bogus >/dev/null 2>&1; rc=$?

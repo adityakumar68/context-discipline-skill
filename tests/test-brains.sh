@@ -4,7 +4,7 @@
 #   1. the choice made with /brain in this Claude Code window (<config>/brain-sessions/<key>; the key is
 #      pid-$CLAUDE_PID, else sid-<session id>);
 #   2. CD_BRAIN=<name> or CD_BRAIN=none in the environment;
-#   3. the folder walk-up to .claude/brain (the default, unchanged).
+#   3. else no brain: a folder's .claude/brain pointer is never read. SessionStart then prints a one-line hint.
 # Named brains come from the registry <config>/brains.json, <config> being $CLAUDE_CONFIG_DIR or ~/.claude:
 #   {"version": 2, "brains": {"<name>": {"dir": "<abs brain folder>", "status": "<STATUS, relative to dir>"}}}
 # A version 1 registry ({"root": ..., "status": "<abs STATUS>"}) is still read: dir = the STATUS file's folder.
@@ -27,6 +27,8 @@ has() { printf '%s' "$1" | grep -qF -- "$2"; }
 lines() { printf '%s\n' "$1" | grep -c ''; }
 # refused <output> <subject>: one warning line that names <subject>, and no STATUS text.
 refused() { [ "$(lines "$1")" = 1 ] && has "$1" "not loaded" && has "$1" "$2" && ! has "$1" status-of-; }
+# nobrain <output>: the one-line no-brain hint, and no STATUS text.
+nobrain() { [ "$(lines "$1")" = 1 ] && has "$1" "No brain" && ! has "$1" status-of- && ! has "$1" "not loaded"; }
 
 HM="$T/home"; CFG="$HM/.claude"; REG="$CFG/brains.json"
 mkdir -p "$CFG" "$HM/a/.claude" "$HM/a/src" "$HM/b/.claude" "$HM/b/notes" "$HM/plain/x"
@@ -63,12 +65,38 @@ hook() {
     | env HOME="$HM" "$@" perl -e 'alarm shift; exec @ARGV' 10 bash "$H" 2>&1)
 }
 
-# --- the folder walk-up stays the default -------------------------------------------------------------------------
+# --- no choice and no CD_BRAIN: no brain, whatever the folder ------------------------------------------------------
 hook "$HM/a/src"
-check "no choice, no CD_BRAIN: the walk-up loads the folder's brain, closing line unchanged" \
-  eval 'has "$out" status-of-a && has "$out" "(Project brain loaded from $HM/a/STATUS.md. Working rules"'
+check "no choice, no CD_BRAIN, inside a folder with a .claude/brain pointer: no brain (the pointer is not read)" \
+  nobrain "$out"
+check "the no-brain hint names the registered brains and how to attach one" \
+  eval '[ "$out" = "No brain attached. Brains: a, b. Type /brain <name> to attach one." ]'
 hook "$HM/a" CD_BRAIN=
-check "CD_BRAIN set but empty: same as unset" has "$out" status-of-a
+check "CD_BRAIN set but empty: same as unset" nobrain "$out"
+for src in clear resume fork; do
+  out=$(printf '{"session_id": "s", "source": "%s"}' "$src" | env HOME="$HM" bash "$H" 2>&1)
+  check "no brain, source $src: the hint" nobrain "$out"
+done
+out=$(printf '{"session_id": "s", "source": "compact"}' | env HOME="$HM" bash "$H" 2>&1)
+check "no brain, source compact: prints nothing (the hint was given at the start)" [ -z "$out" ]
+out=$(printf '{"session_id": "s"}' | env HOME="$HM" bash "$H" 2>&1)
+check "no brain, no source in the input: the hint" nobrain "$out"
+cp "$REG" "$T/reg.keep"; rm -f "$REG"
+hook "$HM/plain"
+check "no brain and no registry: says there are none yet and how to make one" \
+  eval '[ "$out" = "No brains yet. /brain new <name> creates one." ]'
+registry "$REG"; hook "$HM/plain"
+check "no brain and an empty registry: the same" eval '[ "$out" = "No brains yet. /brain new <name> creates one." ]'
+printf '{"version": 2, "brains": ' > "$REG"; hook "$HM/plain"
+check "no brain and a registry that cannot be read: one line pointing to /brain" \
+  eval 'nobrain "$out" && has "$out" "/brain" && ! has "$out" "Brains:"'
+python3 -I -c 'import json, sys
+b = {"n%02d" % i: {"dir": "/x", "status": "S.md"} for i in range(14)}; b["Bad Name"] = {}
+json.dump({"version": 2, "brains": b}, open(sys.argv[1], "w"))' "$REG"
+hook "$HM/plain"
+check "no brain, 14 brains: the hint names the first 10 and says how many more, skips names that are not names" \
+  eval 'nobrain "$out" && has "$out" "Brains: n00, n01, n02, n03, n04, n05, n06, n07, n08, n09 and 4 more." && ! has "$out" "Bad Name"'
+cp "$T/reg.keep" "$REG"
 
 # --- CD_BRAIN -------------------------------------------------------------------------------------------------------
 hook "$HM/a/src" CD_BRAIN=b
@@ -78,7 +106,7 @@ check "CD_BRAIN=b: the closing line names the brain and how it was chosen" \
 hook "$HM/plain/x" CD_BRAIN=b
 check "CD_BRAIN=b in a folder with no brain: loads b" has "$out" status-of-b
 hook "$HM/a/src" CD_BRAIN=none
-check "CD_BRAIN=none inside project a: prints nothing" [ -z "$out" ]
+check "CD_BRAIN=none: no brain, only the hint" nobrain "$out"
 hook "$HM/a" CD_BRAIN=zzz
 check "CD_BRAIN names an unregistered brain: one warning line naming it and the registry, nothing loaded" \
   eval 'refused "$out" "brain \"zzz\" (chosen with CD_BRAIN)" && has "$out" "$REG"'
@@ -101,20 +129,20 @@ out=$(printf '{"cwd": "%s", "session_id": "new-after-clear", "source": "clear"}'
   | env HOME="$HM" CLAUDE_PID=$$ bash "$H" 2>&1)
 check "after /clear (new session id, same window): the choice still holds" has "$out" status-of-b
 hook "$HM/a" CLAUDE_PID=1
-check "another window (other CLAUDE_PID): the choice is not used" eval 'has "$out" status-of-a && ! has "$out" status-of-b'
+check "another window (other CLAUDE_PID): the choice is not used" nobrain "$out"
 hook "$HM/a" CLAUDE_PID=12x
-check "CLAUDE_PID that is not a number: ignored" has "$out" status-of-a
+check "CLAUDE_PID that is not a number: ignored" nobrain "$out"
 choose "pid-$$" none
 hook "$HM/a" CLAUDE_PID=$$ CD_BRAIN=b
-check "/brain none: prints nothing, even inside a brain project with CD_BRAIN set" [ -z "$out" ]
+check "/brain none: no brain even with CD_BRAIN set, only the hint" nobrain "$out"
 choose "pid-$$" 'Not A Name'
 hook "$HM/a" CLAUDE_PID=$$
-check "a choice file that holds no valid name: ignored (walk-up)" has "$out" status-of-a
+check "a choice file that holds no valid name: ignored" nobrain "$out"
 
 # The choice records when its window started, so a later process that gets the same PID does not inherit it.
 choose "pid-$$" b "Mon Jan 1 00:00:00 2001"
 hook "$HM/a" CLAUDE_PID=$$
-check "choice recorded for an older process with the same PID: ignored" eval 'has "$out" status-of-a && ! has "$out" status-of-b'
+check "choice recorded for an older process with the same PID: ignored" nobrain "$out"
 start=$(. "$S/brain-lib.sh"; cd_process_start $$)
 choose "pid-$$" b "$start"
 hook "$HM/a" CLAUDE_PID=$$
@@ -125,7 +153,7 @@ unchoose; choose sid-sess-1 b
 hook "$HM/a"
 check "no CLAUDE_PID: the choice is keyed by the input's session_id" has "$out" status-of-b
 out=$(printf '{"cwd": "%s", "session_id": "sess-2"}' "$HM/a" | env HOME="$HM" bash "$H" 2>&1)
-check "no CLAUDE_PID, another session id: not used" has "$out" status-of-a
+check "no CLAUDE_PID, another session id: not used" nobrain "$out"
 out=$(printf '{"cwd": "%s"}' "$HM/a" | env HOME="$HM" CLAUDE_CODE_SESSION_ID=sess-1 bash "$H" 2>&1)
 check "no session_id in the input: \$CLAUDE_CODE_SESSION_ID is the key" has "$out" status-of-b
 unchoose
@@ -133,7 +161,7 @@ unchoose
 # A choice file that is not a regular file (a FIFO here) is skipped without blocking.
 mkdir -p "$CFG/brain-sessions"; mkfifo "$CFG/brain-sessions/pid-$$"
 hook "$HM/a" CLAUDE_PID=$$; rc=$?
-check "choice file is a FIFO: skipped, no hang (walk-up)" eval '[ $rc = 0 ] && has "$out" status-of-a'
+check "choice file is a FIFO: skipped, no hang" eval '[ $rc = 0 ] && nobrain "$out"'
 unchoose
 
 # --- what a registered brain may name -----------------------------------------------------------------------------
@@ -210,9 +238,9 @@ hook "$HM/a" CD_BRAIN=b2
 check "CLAUDE_CONFIG_DIR unset: ~/.claude/brains.json is read, which lacks b2" refused "$out" 'brain "b2"'
 printf 'none\n\n' > "$CD2/brain-sessions/pid-$$"
 hook "$HM/a" CLAUDE_PID=$$ CLAUDE_CONFIG_DIR="$CD2"
-check "CLAUDE_CONFIG_DIR set: the window's choice is read there too" [ -z "$out" ]
+check "CLAUDE_CONFIG_DIR set: the window's choice is read there too" eval 'nobrain "$out" && has "$out" b2'
 
-# Without python3 the registry cannot be read: a named brain is refused with a reason; the walk-up still works.
+# Without python3 the registry cannot be read: a named brain is refused with a reason; no brain gives the hint.
 NOPY="$T/bin-without-python"; mkdir -p "$NOPY"
 for c in bash cat dirname basename readlink tr wc head tail od awk jq ps perl env; do
   p=$(command -v "$c") && ln -s "$p" "$NOPY/$c"
@@ -222,7 +250,7 @@ out=$(cd "$HM/a" && printf '{"cwd": "%s"}' "$HM/a" | env PATH="$NOPY" HOME="$HM"
 check "no python3: CD_BRAIN=b gives one warning saying python3 is needed" \
   eval 'refused "$out" "brain \"b\"" && has "$out" python3'
 out=$(cd "$HM/a" && printf '{"cwd": "%s"}' "$HM/a" | env PATH="$NOPY" HOME="$HM" "$NOPY/bash" "$H" 2>&1)
-check "no python3, no choice: the walk-up still loads the folder's brain" has "$out" status-of-a
+check "no python3, no choice: the hint, without names" eval 'nobrain "$out" && has "$out" "/brain" && ! has "$out" "Brains:"'
 
 # --- speed: a chosen brain costs one small python3 run and one ps ------------------------------------------------
 choose "pid-$$" b "$start"

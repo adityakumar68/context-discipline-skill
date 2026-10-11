@@ -96,10 +96,13 @@ check ".gitignore over 1 MB: not read or changed, summary says to add the line b
   eval '[ $rc = 0 ] && cmp -s "$HM/f7/.gitignore" "$T/f7-orig" && has "$out" "NOT changed"'
 
 # --- whatever init-brain sets up, the hook loads ------------------------------------------------------------------
-mkdir -p "$HM/p4/sub"
+mkdir -p "$HM/p4/sub" "$HM/.claude"
 init "$HM/p4" docs/brain/STATUS.md >/dev/null
-out=$(printf '{"cwd": "%s"}' "$HM/p4/sub" | env -u CLAUDE_PROJECT_DIR HOME="$HM" bash "$H" | tail -n 1)
-check "nested custom STATUS path: the hook loads it" has "$out" "loaded from $HM/p4/docs/brain/STATUS.md"
+python3 -I -c 'import json, sys
+json.dump({"version": 2, "brains": {"p4": {"dir": sys.argv[2], "status": "STATUS.md"}}}, open(sys.argv[1], "w"))' \
+  "$HM/.claude/brains.json" "$HM/p4/docs/brain"
+out=$(printf '{"cwd": "%s"}' "$HM/p4/sub" | env -u CLAUDE_PROJECT_DIR HOME="$HM" CD_BRAIN=p4 bash "$H" | tail -n 1)
+check "nested custom STATUS path: the hook loads it once registered" has "$out" "loaded from $HM/p4/docs/brain/STATUS.md"
 
 # --- .claude/compactions/ (compact-log.sh's summaries) is kept out of git -------------------------------------------
 IGN='.claude/compactions/'
