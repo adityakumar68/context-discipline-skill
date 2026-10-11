@@ -269,6 +269,25 @@ bc "$HM/plain"
 check "list after one detached: 1 attached window" hasline "$out" "^  alpha .*, attached in 1 window\$"
 rm -f "$SES/pid-$PPID" "$SES/pid-1" "$SES/sid-other"
 
+# --- /brain <name> remembers the folder it was attached from (for the no-brain hint) -------------------------------
+rm -f "$SES/last-used"
+bc "$HM/plain" alpha
+check "/brain alpha records '<folder><TAB>alpha' in brain-sessions/last-used" \
+  eval '[ "$(cat "$SES/last-used")" = "$HM/plain	alpha" ]'
+bc "$HM/plain" beta; bc "$HM/a" alpha
+check "one line per folder, the latest attach last" \
+  eval '[ "$(cat "$SES/last-used")" = "$(printf "%s\tbeta\n%s\talpha" "$HM/plain" "$HM/a")" ]'
+bc "$HM/plain" none
+check "/brain none records nothing" eval '[ "$(grep -c "" "$SES/last-used")" = 2 ]'
+python3 -I -c 'import sys
+open(sys.argv[1], "w").write("".join("/f%03d\tbeta\n" % i for i in range(300)))' "$SES/last-used"
+bc "$HM/plain" alpha
+check "last-used keeps the 200 most recent folders" \
+  eval '[ "$(grep -c "" "$SES/last-used")" = 200 ] && [ "$(tail -n 1 "$SES/last-used")" = "$HM/plain	alpha" ]'
+mkdir -p "$HM/tab	dir"; bc "$HM/tab	dir" alpha
+check "a folder whose path holds a tab: not recorded" eval '! grep -q "tab" "$SES/last-used"'
+rm -f "$SES/last-used"; bc "$HM/plain" none
+
 # --- /brain auto is gone: there is no folder default to go back to ------------------------------------------------
 cp "$SES/pid-$$" "$T/choice.before"
 bc "$HM/a" auto

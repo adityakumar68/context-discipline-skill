@@ -291,6 +291,24 @@ put_choice() {
   rm -f -- "$tmp"; return 1
 }
 
+# remember_folder <name>: note that <name> was attached from this session's folder ($CLAUDE_PROJECT_DIR, else the
+# current one), so a later session started there can be told which brain was used here (a hint, never an attach).
+# <config>/brain-sessions/last-used: one "<folder><TAB><name>" line per folder, the latest last, at most 200.
+remember_folder() {
+  local dir file="$SES/last-used" tmp
+  dir=$(cd -P -- "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null && pwd -P) || return 0
+  case "$dir" in *[[:cntrl:]]*) return 0 ;; esac
+  if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then return 0; fi
+  tmp=$(mktemp "$SES/.last.XXXXXX" 2>/dev/null) || return 0
+  if { if [ -f "$file" ]; then
+         head -c 262144 -- "$file" 2>/dev/null | D="$dir" awk -F '\t' 'NF == 2 && $1 != ENVIRON["D"]'
+       fi
+       printf '%s\t%s\n' "$dir" "$1"; } | tail -n 200 > "$tmp" && mv -f -- "$tmp" "$file"; then
+    return 0
+  fi
+  rm -f -- "$tmp"
+}
+
 # write_choice <name|none>: record the choice for this window.
 write_choice() {
   local key start=""
@@ -373,6 +391,7 @@ pick() {
     fi
   fi
   write_choice "$name" || return
+  [ "$name" = none ] || remember_folder "$name"
   if [ "$name" = none ]; then
     echo "This window now uses no project brain: the hooks load none here, at the next start, /clear or compaction"
     echo "included. Disregard any project STATUS loaded earlier in this session. Pick one again with /brain <name>."

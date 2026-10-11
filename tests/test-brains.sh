@@ -285,6 +285,45 @@ check "brain-sessions is a symlink: STATUS still printed, nothing written throug
   eval '[ $rc = 0 ] && has "$out" status-of-b && [ -z "$(ls -A "$T/away")" ]'
 rm -f "$CFG/brain-sessions"
 
+# --- the no-brain hint names the brain last attached by a window started in the same folder (never attaches it) --
+B="$S/brain.sh"; LU="$CFG/brain-sessions/last-used"
+# attach <folder> <name> [VAR=value...]: /brain <name> run in <folder> by window CLAUDE_PID=$PPID.
+attach() { local f="$1" n="$2"; shift 2; (cd "$f" && env HOME="$HM" CLAUDE_PID=$PPID "$@" bash "$B" "$n" >/dev/null 2>&1); }
+mkdir -p "$HM/proj/sub" "$HM/other"; rm -rf "$CFG/brain-sessions"
+attach "$HM/proj" b
+hook "$HM/proj"
+check "a session started in a folder where /brain b was run: the hint suggests b, lists all brains" \
+  eval '[ "$out" = "No brain attached. Last used here: b (type /brain b). All brains: a, b." ]'
+check "the hint never attaches it: no choice for this window, no STATUS" \
+  eval '[ ! -e "$CFG/brain-sessions/sid-sess-1" ] && ! has "$out" status-of'
+hook "$HM/other"
+check "another folder: no suggestion" eval '[ "$out" = "No brain attached. Brains: a, b. Type /brain <name> to attach one." ]'
+hook "$HM/proj/sub"
+check "a subfolder of it: no suggestion (the same folder only)" eval '! has "$out" "Last used"'
+ln -s "$HM/proj" "$HM/proj-link"; hook "$HM/proj-link"
+check "the same folder through a symlink: suggested" has "$out" "Last used here: b"
+attach "$HM/proj" a
+hook "$HM/proj"
+check "attached later from the same folder: the most recent one is suggested" has "$out" "Last used here: a (type /brain a)."
+attach "$HM/proj/sub" b CLAUDE_PROJECT_DIR="$HM/other"
+hook "$HM/other"
+check "/brain records the session's folder (\$CLAUDE_PROJECT_DIR) rather than the shell's current one" has "$out" "Last used here: b"
+registry "$REG" b "$HM/b/notes" STATUS.md
+hook "$HM/proj"
+check "the suggested brain no longer exists: no suggestion" eval '[ "$out" = "No brain attached. Brains: b. Type /brain <name> to attach one." ]'
+registry "$REG" a "$HM/a" STATUS.md b "$HM/b/notes" STATUS.md
+hook "$HM/proj" CD_BRAIN=none
+check "CD_BRAIN=none: still only a hint, with the suggestion" has "$out" "Last used here: a"
+out=$(printf '{"session_id": "s", "source": "startup"}' | env HOME="$HM" CLAUDE_PROJECT_DIR="$HM/proj" bash "$H" 2>&1)
+check "no cwd in the input: \$CLAUDE_PROJECT_DIR is the session's folder" has "$out" "Last used here: a"
+rm -f "$LU"; mkfifo "$LU"
+hook "$HM/proj"; rc=$?
+check "last-used is a FIFO: no hang, the plain hint" eval '[ $rc = 0 ] && [ "$out" = "No brain attached. Brains: a, b. Type /brain <name> to attach one." ]'
+rm -f "$LU"; printf '%s\tzzz\n%s\tBad Name\n' "$HM/proj" "$HM/proj" > "$LU"
+hook "$HM/proj"
+check "last-used naming an unregistered or invalid name: no suggestion" eval '! has "$out" "Last used"'
+rm -rf "$CFG/brain-sessions"
+
 # --- speed: a chosen brain costs one small python3 run and one ps ------------------------------------------------
 choose "pid-$$" b "$start"
 t0=$(python3 -I -c 'import time; print(time.time())')
