@@ -4,6 +4,8 @@ A [Claude Code](https://code.claude.com/docs) skill for long work: projects that
 surveys, design → spec → plan, and anything that dispatches subagents. It keeps the main agent's context small, and
 it keeps the project's state on disk, where a compaction or a new session cannot lose it.
 
+**New here? Start with the short [usage guide](USAGE.md)** — setup, daily use and every `/brain` command on one page.
+
 ## The problem
 
 Every API call resends the whole context. When the window fills, Claude Code compacts the conversation into a
