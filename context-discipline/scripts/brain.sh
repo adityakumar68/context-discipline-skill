@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
-# brain.sh -- the /brain command of the context-discipline skill: list, pick and register named project brains.
+# brain.sh -- the /brain command of the context-discipline skill: list, attach, create and register brains.
+# A brain belongs to a Claude Code window (session), never to a folder; its folder is only where its files live.
 #
 #   brain.sh                        list the registered brains (folder, STATUS size and date), mark the one this
 #                                   window uses, and name an old .claude/brain pointer in the current folder
-#   brain.sh <name>                 use that brain in this Claude Code window, and print its STATUS
-#   brain.sh none                   use no brain in this window
-#   brain.sh add <name> [folder]    register the brain of <folder> (default: the current folder)
-#   brain.sh new <name> <folder>    set up a brain in <folder> with init-brain.sh, then register it
-#   brain.sh rename <old> <new>     rename a registered brain (registry only)
-#   brain.sh remove <name>          unregister a brain (registry only; its files stay)
+#   brain.sh <name>                 attach that brain to this Claude Code window, and print its STATUS
+#   brain.sh none                   detach: this window uses no brain
+#   brain.sh new <name> [--at <folder>]     create a brain (STATUS.md and overview, with init-brain.sh) in
+#                                   <config>/brains/<name> or <folder>, register it and attach it to this window
+#   brain.sh add <name> <folder|STATUS file>   register an existing brain: <folder>/STATUS.md, or that file
+#   brain.sh add <name>             register the brain an old .claude/brain pointer in the current folder names
+#   brain.sh rename <old> <new>     rename a brain (registry, the windows' choices and its compaction logs)
+#   brain.sh remove <name>          unregister a brain (its files and logs stay)
 #   brain.sh --args                 the same, with the words read from stdin as one raw string (what the /brain
 #                                   skill passes): split here like shell words ('...', "...", \) with nothing
 #                                   expanded, so no character in it can run a command or cut the command short
-# A folder argument that starts with ~ or ~/ is taken from $HOME.
+# A path argument that starts with ~ or ~/ is taken from $HOME.
 #
 # Registry: <config>/brains.json, <config> being $CLAUDE_CONFIG_DIR or ~/.claude. A window's choice:
 # <config>/brain-sessions/pid-$CLAUDE_PID (else sid-$CLAUDE_CODE_SESSION_ID), two lines: the name (or "none") and
 # when that Claude Code process started, so a later process with the same PID does not inherit it. Writing a
 # choice prunes choices older than 7 days whose window no longer runs. The hooks read both through brain-lib.sh,
 # with the same rules, so what this lists is what they load.
-# Never moves or deletes project files. The registry is replaced atomically, and only if it could be read.
+# Never moves or deletes a brain's files. The registry is replaced atomically, and only if it could be read.
 # Always exits 0: the /brain skill runs this through Claude Code's !`command` injection, which aborts the skill on
 # a non-zero exit before Claude sees any message. Errors are lines that start with "brain: ".
 
@@ -32,19 +35,26 @@ RESERVED=" none auto add new rename remove help list "
 REG="$(cd_config_dir)/brains.json"
 SES="$(cd_config_dir)/brain-sessions"
 
+LOGS="$(cd_config_dir)/brain-logs"
+POINTER_READ=4096   # bytes of an old pointer that are read (the refusal reasons say 4,096)
+PATH_MAX=1024       # bytes in its path line, PATH_MAX on macOS (the refusal reasons say 1,024)
+
 say_err() { printf 'brain: %s\n' "$*"; }
 
 usage() {
   cat <<EOF
-usage: /brain                        list the brains; * marks the one this window uses
-       /brain <name>                 use that brain in this window (prints its STATUS)
-       /brain none                   use no brain in this window
-       /brain add <name> [folder]    register the brain of a folder (default: the current one)
-       /brain new <name> <folder>    set up a brain in a folder, then register it
-       /brain rename <old> <new>     rename a registered brain (registry only)
-       /brain remove <name>          unregister a brain (its files stay)
+usage: /brain                              list the brains; * marks the one this window uses
+       /brain <name>                       attach that brain to this window (prints its STATUS)
+       /brain none                         detach: this window uses no brain
+       /brain new <name> [--at <folder>]   create a brain (in $(cd_config_dir)/brains/<name>, or <folder>)
+                                           and attach it to this window
+       /brain add <name> <folder|STATUS file>   register an existing brain (no path: the one an old
+                                           .claude/brain pointer in the current folder names)
+       /brain rename <old> <new>           rename a brain (registry and compaction logs)
+       /brain remove <name>                unregister a brain (its files stay)
 Names: 1 to 32 of a-z, 0-9 and "-". Registry: $REG
-Starting Claude Code with CD_BRAIN=<name> (or none) picks a brain for that window until /brain changes it.
+A brain belongs to a Claude Code window, not a folder. Starting Claude Code with CD_BRAIN=<name> (or none)
+attaches one for that window until /brain changes it.
 EOF
 }
 
@@ -239,6 +249,51 @@ write_choice() {
   put_choice "$SES/$key" "$1" "$start" || { say_err "cannot write $SES/$key (see README: Several brains, sandbox)."; return 1; }
 }
 
+# --- old .claude/brain pointers (read only to register the brain one names) ---------------------------------------
+
+# check_pointer: read the STATUS path from the old pointer $CD_POINTER (a regular file) and accept it only if it is
+# a text file inside the pointer's folder $CD_ROOT, as the hooks of earlier versions did. Sets LC_ALL=C.
+# On success sets CD_REL (the path as the pointer gives it), CD_STATUS (the file, symlinks resolved) and
+# CD_SIZE (its size in bytes).
+# Returns 1 with CD_REFUSED set to the reason (to follow "<pointer> ") if the pointer is refused,
+# 2 if its folder cannot be read at all.
+check_pointer() {
+  local line="" rel="" size text ended=0 more=""
+  LC_ALL=C; export LC_ALL
+  CD_REL=""; CD_STATUS=""; CD_SIZE=""; CD_REFUSED=""
+  # Only the first $POINTER_READ bytes are read. The pointer is a regular file (the caller checks with -f), so
+  # opening it cannot block; the cap keeps a huge pointer (a cloned repo's is untrusted) from costing memory or
+  # (bash 3.2 trims strings in quadratic time) seconds of CPU.
+  while :; do
+    if IFS= read -r line; then ended=1; elif [ -n "$line" ]; then ended=0; else break; fi
+    line="${line%$'\r'}"
+    line="${line#$'\357\273\277'}"            # drop a UTF-8 byte-order mark
+    line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
+    line="${line%"${line##*[![:space:]]}"}"   # trim trailing whitespace
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    rel="$line"
+    break
+  done < <(head -c "$POINTER_READ" -- "$CD_POINTER" 2>/dev/null)
+  size=$(wc -c < "$CD_POINTER" 2>/dev/null | tr -d '[:space:]')
+  case "$size" in ''|*[!0-9]*) size=0 ;; esac
+  [ "$size" -gt "$POINTER_READ" ] && more=" in its first 4,096 bytes"
+  # A line without a newline is whole only if the file ends there; one cut by the read is never used.
+  if [ -n "$rel" ] && { [ "${#rel}" -gt "$PATH_MAX" ] || { [ "$ended" = 0 ] && [ -n "$more" ]; }; }; then
+    CD_REFUSED="names no file: its path line must be at most 1,024 bytes and end within its first 4,096"; return 1
+  fi
+  [ -n "$rel" ] || { CD_REFUSED="names no file$more"; return 1; }
+  case "$rel" in
+    /*|'~'*) CD_REFUSED="must name its STATUS file by a path relative to its project folder"; return 1 ;;
+  esac
+  CD_ROOT=$(cd -P -- "$CD_ROOT" 2>/dev/null && pwd -P) || return 2
+  CD_DIR="$CD_ROOT"
+  cd_check_status "$CD_ROOT/$rel" || return $?
+  CD_REL="$rel"
+  return 0
+}
+
 # --- commands -----------------------------------------------------------------------------------------------------
 
 pick() {
@@ -272,10 +327,10 @@ pick() {
   printf '{}' | CD_HOOKS= bash "$here/brain-hook.sh"
 }
 
-# register <name> <dir> <status>
+# register <name> <dir> <status>: fails (after saying why) if nothing was registered.
 register() {
   local out rc=0
-  case "$2$3" in *[[:cntrl:]]*) say_err "the path contains control characters; not registered."; return ;; esac
+  case "$2$3" in *[[:cntrl:]]*) say_err "the path contains control characters; not registered."; return 1 ;; esac
   out=$(regpy set "$REG" "$1" "$2" "$3") || rc=$?
   case $rc in
     0) printf 'Registered brain "%s": %s (STATUS: %s).\nUse it in this window: /brain %s\n' "$1" "$2" "$3" "$1" ;;
@@ -286,35 +341,67 @@ register() {
                         "$1" "$2" "${out#*$'\t'}" ;;
          *) printf 'Updated brain "%s": it now points to %s, in place of an entry /brain could not use.\n' "$1" "$2" ;;
        esac ;;
-    6) say_err "the name \"$1\" is already used for $out; pick another name (or /brain rename or /brain remove it first)." ;;
-    *) say_err "${out:-cannot write $REG}" ;;
+    6) say_err "the name \"$1\" is already used for $out; pick another name (or /brain rename or /brain remove it first)."
+       return 1 ;;
+    *) say_err "${out:-cannot write $REG}"; return 1 ;;
   esac
 }
 
+# add <name> [path]: register <path>/STATUS.md, or the STATUS file <path>; with no path, the brain an old
+# .claude/brain pointer in the current folder names.
 add() {
-  local name="$1" folder dir
-  folder=$(expand_tilde "${2:-$PWD}")
+  local name="$1" path dir file
   new_name_ok "$name" || return
   need_python || return
-  dir=$(cd -P -- "$folder" 2>/dev/null && pwd -P) || { say_err "not a folder: $folder"; return; }
-  if ! CD_HOOKS= cd_find_brain "$dir"; then
-    say_err "no project brain at or above $dir (a .claude/brain pointer below your home folder)." \
-      "Set one up and register it with: /brain new $name <folder>"
-    return
-  fi
   LC_ALL=C; export LC_ALL
-  cd_check_pointer
-  case $? in
-    0) ;;
-    1) say_err "$CD_POINTER $CD_REFUSED, so the hooks would not load it; not registered."; return ;;
-    *) say_err "cannot read the project at $CD_ROOT; not registered."; return ;;
-  esac
-  register "$name" "${CD_STATUS%/*}" "${CD_STATUS##*/}"
+  if [ -z "${2-}" ]; then add_pointer "$name"; return; fi
+  path=$(expand_tilde "$2")
+  if [ -d "$path" ]; then
+    dir="$path"; file=STATUS.md
+    if [ ! -e "$dir/STATUS.md" ] && [ ! -L "$dir/STATUS.md" ]; then
+      say_err "no STATUS.md in $path. Name the brain's STATUS file itself (/brain add $name <file>), or create a" \
+        "brain there: /brain new $name --at $path"
+      return
+    fi
+  elif [ -e "$path" ] || [ -L "$path" ]; then
+    dir=$(dirname -- "$path"); file=$(basename -- "$path")
+  else
+    say_err "not found: $path"; return
+  fi
+  dir=$(cd -P -- "$dir" 2>/dev/null && pwd -P) || { say_err "cannot read the folder of $path"; return; }
+  if ! cd_check_brain "$dir" "$file" "$name"; then
+    say_err "$path: the brain ${CD_REFUSED:-cannot be read}, so the hooks would not load it; not registered."; return
+  fi
+  register "$name" "$CD_DIR" "$CD_REL"
 }
 
+# add_pointer <name>: register the brain that the old pointer ./.claude/brain names (the migration from folder
+# brains). The pointer is read as the hooks of earlier versions read it, and is left in place.
+add_pointer() {
+  local name="$1" ptr="$PWD/.claude/brain"
+  if [ ! -e "$ptr" ] && [ ! -L "$ptr" ]; then
+    say_err "name the brain's folder or STATUS file: /brain add $name <folder|STATUS file> (there is no old" \
+      ".claude/brain pointer in $PWD to take it from). To create a brain: /brain new $name"
+    return
+  fi
+  if [ ! -f "$ptr" ]; then say_err "$ptr is not a regular file; name the brain's folder or STATUS file instead."; return; fi
+  CD_POINTER="$ptr"; CD_ROOT="$PWD"
+  check_pointer
+  case $? in
+    0) ;;
+    1) say_err "$ptr $CD_REFUSED, so it cannot be registered; name the brain's folder or STATUS file instead."; return ;;
+    *) say_err "cannot read $PWD; not registered."; return ;;
+  esac
+  if ! cd_check_brain "${CD_STATUS%/*}" "${CD_STATUS##*/}" "$name"; then
+    say_err "$ptr names $CD_STATUS, but the brain ${CD_REFUSED:-cannot be read}; not registered."; return
+  fi
+  register "$name" "$CD_DIR" "$CD_REL" || return
+  echo "The old pointer $ptr is no longer read by the hooks; you can delete it."
+}
+
+# new <name> <folder>: create a brain (in <config>/brains/<name> when <folder> is ""), register it, attach it.
 new() {
-  local name="$1" folder dir rc=0 out
-  folder=$(expand_tilde "$2")
+  local name="$1" folder rc=0 out
   new_name_ok "$name" || return
   need_python || return
   out=$(regpy get "$REG" "$name") || rc=$?
@@ -323,16 +410,24 @@ new() {
     0) say_err "the name \"$name\" is already used for ${out%%$'\n'*}; pick another name."; return ;;
     *) say_err "$REG ${out:-cannot be read}; fix it or move it aside, then run /brain again."; return ;;
   esac
-  dir=$(cd -P -- "$folder" 2>/dev/null && pwd -P) || dir=""
-  if [ -n "$dir" ] && { [ -e "$dir/.claude/brain" ] || [ -L "$dir/.claude/brain" ]; }; then
-    say_err "$dir already has a brain ($dir/.claude/brain); register it as it is with: /brain add $name $dir"
+  if [ -n "$2" ]; then
+    folder=$(expand_tilde "$2")
+  else
+    folder="$(cd_config_dir)/brains/$name"
+    mkdir -p -- "${folder%/*}" 2>/dev/null || { say_err "cannot create ${folder%/*}."; return; }
+  fi
+  if [ -e "$folder/STATUS.md" ] || [ -L "$folder/STATUS.md" ]; then
+    say_err "$folder already holds a STATUS.md; register it as it is with: /brain add $name $folder"
     return
   fi
-  if ! bash "$here/init-brain.sh" "$folder" 2>&1; then
+  if ! bash "$here/init-brain.sh" "$folder" "$name" 2>&1; then
     say_err "init-brain.sh did not finish (see above); nothing registered."; return
   fi
-  echo
-  add "$name" "$folder"
+  folder=$(cd -P -- "$folder" 2>/dev/null && pwd -P) || { say_err "cannot read $folder; nothing registered."; return; }
+  out=$(register "$name" "$folder" STATUS.md) || { printf '%s
+' "$out"; return; }
+  printf 'Registered brain "%s": %s.\n\n' "$name" "$folder"
+  pick "$name"
 }
 
 # rechoose <old> <new>: windows that chose <old> now read <new>. Each file is checked again just before it is
@@ -353,6 +448,18 @@ rechoose() {
   done
 }
 
+# move_logs <old> <new>: brain-logs/<old> becomes brain-logs/<new>, unless that already exists.
+move_logs() {
+  [ -d "$LOGS/$1" ] && [ ! -L "$LOGS/$1" ] || return 0
+  if [ -e "$LOGS/$2" ] || [ -L "$LOGS/$2" ]; then
+    echo "Its compaction logs stay in $LOGS/$1 ($LOGS/$2 already exists)."
+  elif mv -- "$LOGS/$1" "$LOGS/$2" 2>/dev/null; then
+    echo "Its compaction logs moved to $LOGS/$2."
+  else
+    echo "Its compaction logs stay in $LOGS/$1 (they could not be moved)."
+  fi
+}
+
 rename() {
   local old="$1" new="$2" out rc=0
   cd_valid_name "$old" || { say_err "\"$(cd_printable "$old")\" is not a brain name."; return; }
@@ -362,7 +469,8 @@ rename() {
   out=$(regpy rename "$REG" "$old" "$new") || rc=$?
   case $rc in
     0) rechoose "$old" "$new"
-       printf 'Renamed brain "%s" to "%s" (registry only; no project file was changed).\n' "$old" "$new" ;;
+       printf 'Renamed brain "%s" to "%s" (no file in its folder was changed).\n' "$old" "$new"
+       move_logs "$old" "$new" ;;
     3) say_err "no brain named \"$old\" in $REG. See /brain." ;;
     6) say_err "the name \"$new\" is already used for $out; pick another name." ;;
     *) say_err "${out:-cannot write $REG}" ;;
@@ -377,6 +485,7 @@ remove() {
   case $rc in
     0) printf 'Removed brain "%s" from the registry. Its files stay in %s; to register it again: /brain add %s %s\n' \
          "$name" "${out:-its folder}" "$name" "${out:-<folder>}"
+       if [ -d "$LOGS/$name" ]; then echo "Its compaction logs stay in $LOGS/$name."; fi
        echo "Windows that chose it load no brain (with a warning) until they pick another." ;;
     3) say_err "no brain named \"$name\" in $REG. See /brain." ;;
     *) say_err "${out:-cannot write $REG}" ;;
@@ -384,10 +493,9 @@ remove() {
 }
 
 list() {
-  local sel s_how s_name s_root s_status s_subject s_refused rows rc=0 width=4 name root status problem info mark
-  local roots="" here_root here_rel
+  local sel s_how s_name s_subject s_refused rows rc=0 width=4 name root status problem info mark roots=""
   cd_select_brain ""; sel=$?
-  s_how="$CD_HOW"; s_name="$CD_NAME"; s_root="$CD_ROOT"; s_status="$CD_STATUS"
+  s_how="$CD_HOW"; s_name="$CD_NAME"
   s_subject="$CD_SUBJECT"; s_refused="$CD_REFUSED"
   if [ ! -e "$REG" ] && [ ! -L "$REG" ]; then
     rows=""
@@ -402,10 +510,10 @@ list() {
     echo "The registry $REG ${rows:-cannot be read}; fix it or move it aside."
     rows=""
   elif [ -z "$rows" ]; then
-    echo "No named brains yet (registry: $REG)."
-    echo "Register a folder's brain: /brain add <name> [folder]. Set up a new one: /brain new <name> <folder>"
+    echo "No brains yet (registry: $REG)."
+    echo "Create one: /brain new <name> [--at <folder>]. Register an existing one: /brain add <name> <folder|STATUS file>"
   else
-    echo "Named brains (registry: $REG):"
+    echo "Brains (registry: $REG):"
     while IFS=$'\037' read -r name root status problem; do [ ${#name} -gt $width ] && width=${#name}; done <<<"$rows"
     while IFS=$'\037' read -r name root status problem; do
       mark=" "
@@ -414,9 +522,7 @@ list() {
       elif cd_check_brain "$root" "$status" "$name"; then
         info="$CD_REL, $(commas "$CD_SIZE") bytes, changed $(date -r "$CD_STATUS" +%Y-%m-%d 2>/dev/null)"
         roots="$roots"$'\n'"$CD_STATUS"
-        if [ "$sel" = 0 ] && { [ "$s_name" = "$name" ] || { [ "$s_how" = folder ] && [ "$s_status" = "$CD_STATUS" ]; }; }; then
-          mark="*"
-        fi
+        [ "$sel" = 0 ] && [ "$s_name" = "$name" ] && mark="*"
       else
         info="not usable: ${CD_REFUSED:-cannot be read}"
       fi
@@ -429,7 +535,7 @@ list() {
   if [ -f "$PWD/.claude/brain" ]; then
     CD_POINTER="$PWD/.claude/brain"; CD_ROOT=$(pwd -P)
     LC_ALL=C; export LC_ALL
-    if cd_check_pointer; then
+    if check_pointer; then
       case "$roots"$'\n' in
         *$'\n'"$CD_STATUS"$'\n'*) ;;
         *) echo "Old pointer here: $CD_POINTER names $(cd_printable "$CD_STATUS" 4096); it is no longer read." \
@@ -452,7 +558,7 @@ list() {
   else
     echo "This window uses no brain: none chosen with /brain, and CD_BRAIN is not set."
   fi
-  echo "Pick: /brain <name>, /brain none. Register: /brain add <name> [folder], /brain new <name> <folder>. Also: rename, remove, help."
+  echo "Attach: /brain <name>, /brain none. Create: /brain new <name> [--at <folder>]. Register: /brain add <name> <folder|STATUS file>. Also: rename, remove, help."
 }
 
 usage_err() { echo "brain: wrong arguments."; usage; }
@@ -483,7 +589,7 @@ case "${1-}" in
   auto) say_err "/brain auto is gone: a brain belongs to a window, not a folder, so there is no default to go back to." \
          "/brain none detaches this window; /brain <name> attaches a brain." ;;
   add) if [ $# = 2 ] || [ $# = 3 ]; then add "$2" "${3-}"; else usage_err; fi ;;
-  new) if [ $# = 3 ]; then new "$2" "$3"; else usage_err; fi ;;
+  new) if [ $# = 2 ]; then new "$2" ""; elif [ $# = 4 ] && [ "$3" = --at ]; then new "$2" "$4"; else usage_err; fi ;;
   rename) if [ $# = 3 ]; then rename "$2" "$3"; else usage_err; fi ;;
   remove) if [ $# = 2 ]; then remove "$2"; else usage_err; fi ;;
   *) if [ $# = 1 ]; then pick "$1"; else usage_err; fi ;;

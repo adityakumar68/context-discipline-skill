@@ -60,19 +60,20 @@ ms=$(python3 -c "import time; print(int((time.time() - $start) * 100))")
 [ "$ms" -lt 1000 ] && ok "hook: ~${ms} ms per run (limit 1000)" || no "hook slow ${ms} ms per run"
 
 mkdir -p "$T/init"; bash "$I" "$T/init" >/dev/null; echo edit >> "$T/init/STATUS.md"
-a=$(sum "$T/init/STATUS.md" "$T/init/00-Project-Overview.md" "$T/init/.claude/brain")
-out=$(bash "$I" "$T/init"); b=$(sum "$T/init/STATUS.md" "$T/init/00-Project-Overview.md" "$T/init/.claude/brain")
-[ "$a" = "$b" ] && [ "$(printf '%s\n' "$out" | grep -c 'exists, left untouched')" = 3 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 6 ] \
-  && ok "init-brain: second run overwrote nothing, reported 3x 'exists', 6-line summary" || no "init-brain rerun"
+a=$(sum "$T/init/STATUS.md" "$T/init/00-Project-Overview.md")
+out=$(bash "$I" "$T/init"); b=$(sum "$T/init/STATUS.md" "$T/init/00-Project-Overview.md")
+[ "$a" = "$b" ] && [ "$(printf '%s\n' "$out" | grep -c 'exists, left untouched')" = 2 ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq 4 ] \
+  && [ ! -e "$T/init/.claude" ] && [ ! -e "$T/init/.gitignore" ] \
+  && ok "init-brain: second run overwrote nothing, reported 2x 'exists', 4-line summary, no pointer or .gitignore" || no "init-brain rerun"
 
 reg init "$T/init"
 out=$(echo "{\"cwd\": \"$T/none\"}" | CD_BRAIN=init hook | tail -n 1)
 printf '%s' "$out" | grep -qF "$T/init/STATUS.md" && ok "init-brain + hook: the brain it set up loads once registered" || no "init+hook"
 
-mkdir -p "$T/init2"; bash "$I" "$T/init2" notes/STATUS.md >/dev/null; reg init2 "$T/init2/notes"
-[ -f "$T/init2/notes/STATUS.md" ] && [ -f "$T/init2/notes/00-Project-Overview.md" ] \
-  && echo "{\"cwd\": \"$T/init2\"}" | CD_BRAIN=init2 hook | tail -n 1 | grep -qF "$T/init2/notes/STATUS.md" \
-  && ok "init-brain: custom STATUS path, overview beside it, the hook loads it" || no "init-brain custom path"
+mkdir -p "$T/init2"; bash "$I" "$T/init2" second >/dev/null; reg second "$T/init2"
+grep -qF "second — STATUS" "$T/init2/STATUS.md" \
+  && echo "{\"cwd\": \"$T/none\"}" | CD_BRAIN=second hook | tail -n 1 | grep -qF "$T/init2/STATUS.md" \
+  && ok "init-brain <folder> <name>: the name heads STATUS, the hook loads it" || no "init-brain name"
 
 G="$T/garbage.jsonl"
 printf '%s\n' 'nope' '[1]' 'null' '{"type":"assistant","message":"s"}' \

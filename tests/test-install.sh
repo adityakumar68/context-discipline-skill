@@ -113,13 +113,12 @@ check "fresh: summary gives the next steps (/hooks check, init-brain, pipe test)
   eval 'printf "%s" "$out" | grep -q "/hooks" && printf "%s" "$out" | grep -q "init-brain.sh" && printf "%s" "$out" | grep -q "Project brain loaded from"'
 check "fresh: summary does not claim hooks load only at startup" eval '! printf "%s" "$out" | grep -qi "read at startup"'
 
-# --- 2. Whole chain: installed init-brain.sh + the exact hook command from settings.json ---------------------
+# --- 2. Whole chain: the installed brain.sh new + the exact hook commands from settings.json -----------------
 P="$H/work/notes-app"; mkdir -p "$P/src/deep"
-inst_out=$(bash "$C/skills/context-discipline/scripts/init-brain.sh" "$P"); rc=$?
-check "chain: installed init-brain.sh sets up the brain" eval '[ "$rc" = 0 ] && [ -f "$P/STATUS.md" ] && [ -f "$P/.claude/brain" ]'
+new_out=$(cd "$H/work" && env -u CLAUDE_CONFIG_DIR HOME="$H" CLAUDE_PID=$$ bash "$C/skills/context-discipline/scripts/brain.sh" new notes --at "$P" 2>&1); rc=$?
+check "chain: the installed brain.sh new sets up and registers the brain, with no pointer" \
+  eval '[ "$rc" = 0 ] && [ -f "$P/STATUS.md" ] && [ ! -e "$P/.claude" ] && printf "%s" "$new_out" | grep -q "Registered brain \"notes\""'
 echo "chain-marker-4711" >> "$P/STATUS.md"
-reg_out=$(cd "$H" && env -u CLAUDE_CONFIG_DIR HOME="$H" CLAUDE_PID=$$ bash "$C/skills/context-discipline/scripts/brain.sh" add notes "$P" 2>&1)
-check "chain: the installed brain.sh registers it" eval 'printf "%s" "$reg_out" | grep -q "Registered brain \"notes\""'
 cmd=$(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print([h["command"] for e in d["hooks"]["SessionStart"] if "matcher" not in e for h in e["hooks"]][0])' "$C/settings.json")
 hook_out=$(printf '{"cwd": "%s", "source": "compact"}' "$P/src/deep" | HOME="$H" CD_BRAIN=notes bash -c "$cmd"); rc=$?
 check "chain: the settings.json command, with CD_BRAIN=notes, prints STATUS" \
@@ -131,7 +130,8 @@ printf '{"cwd": "%s", "session_id": "chain123", "trigger": "manual", "compact_su
   | env -u CLAUDE_PROJECT_DIR HOME="$H" CD_BRAIN=notes bash -c "$(cmd_of PostCompact)"; rc=$?
 check "chain: the PostCompact command saves the summary in <config>/brain-logs/notes/" \
   eval '[ "$rc" = 0 ] && grep -rq chain-summary-4712 "$C/brain-logs/notes"'
-check "chain: installed init-brain.sh put .claude/compactions/ in the project's .gitignore" grep -qx '.claude/compactions/' "$P/.gitignore"
+check "chain: nothing was written in the brain folder but its two files (no .gitignore, no logs)" \
+  eval '[ "$(ls -A "$P" | LC_ALL=C sort | paste -sd, -)" = "00-Project-Overview.md,STATUS.md,src" ]'
 printf '%s\n' '{"type":"assistant","isSidechain":false,"uuid":"a","message":{"id":"m","model":"claude-opus-4-6","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":79990}}}' > "$ROOT/chain.jsonl"
 mkdir -p "$ROOT/chain-tmp"
 nudge_out=$(printf '{"cwd": "%s", "session_id": "chain", "transcript_path": "%s"}' "$P/src/deep" "$ROOT/chain.jsonl" \
@@ -500,7 +500,7 @@ run_bang() {   # run_bang <arguments>: the command with the substitutions made, 
   (mkdir -p "$H31/work" && cd "$H31/work" && env -u CLAUDE_CONFIG_DIR HOME="$H31" CLAUDE_PID=$$ bash -c "$cmd" 2>&1)
 }
 check "/brain skill: '/brain help' runs the installed script and prints its usage" eval 'run_bang help | grep -q "^usage: /brain"'
-check "/brain skill: '/brain' (no arguments) lists, exit 0" eval 'run_bang "" | grep -q "No named brains yet"'
+check "/brain skill: '/brain' (no arguments) lists, exit 0" eval 'run_bang "" | grep -q "No brains yet"'
 check "/brain skill: arguments with a backtick, \$(...) and ; run nothing" \
   eval 'run_bang "x \`touch $H31/p1\` \$(touch $H31/p2); touch $H31/p3" >/dev/null; [ ! -e "$H31/p1" ] && [ ! -e "$H31/p2" ] && [ ! -e "$H31/p3" ]'
 # allowed-tools pre-approves exactly that command, so it runs without a prompt.

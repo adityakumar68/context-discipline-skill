@@ -2,9 +2,12 @@
 # Tests for brain.sh, the script behind the /brain command:
 #   brain.sh                          list the registered brains, mark the one this window uses
 #   brain.sh <name> | none            pick a brain (or none) for this Claude Code window
-#   brain.sh add <name> [folder]      register an existing brain (default: the current folder's)
-#   brain.sh new <name> <folder>      init-brain.sh on the folder, then register it
-#   brain.sh rename <old> <new> | remove <name>     registry only; project files are never touched
+#   brain.sh new <name> [--at <folder>]   create a brain (default folder <config>/brains/<name>) with
+#                                     init-brain.sh, register it and attach it to this window
+#   brain.sh add <name> <folder|STATUS file>   register an existing brain; with no path, the brain an old
+#                                     .claude/brain pointer in the current folder names (migration)
+#   brain.sh rename <old> <new> | remove <name>     the registry (rename also moves the compaction logs); the
+#                                     brain's own files are never touched
 # It always exits 0 (a failing command would abort the /brain skill before Claude sees the message).
 # Usage: bash tests/test-brain-cmd.sh
 # Self-contained: works in a mktemp folder with HOME pointed into it, so nothing outside it is read or written.
@@ -58,46 +61,92 @@ hookout() { local cwd="$1"; shift; printf '{"cwd": "%s", "session_id": "s1"}' "$
 
 # --- empty start -----------------------------------------------------------------------------------------------------
 bc "$HM/plain/x"
-check "list with no registry: says there are none yet, how to add one, exit 0" \
-  eval '[ $rc = 0 ] && has "$out" "No named brains yet" && has "$out" "/brain add <name>" && has "$out" "/brain new <name> <folder>"'
+check "list with no registry: says there are none yet, how to make or register one, exit 0" \
+  eval '[ $rc = 0 ] && has "$out" "No brains yet" && has "$out" "/brain add <name>" && has "$out" "/brain new <name> [--at <folder>]"'
 check "list with no registry and no folder brain: says this window uses no brain" has "$out" "This window uses no brain"
 
-# --- add ---------------------------------------------------------------------------------------------------------------
+# --- add: an existing brain, by its folder or its STATUS file ------------------------------------------------------
 before_a=$(tree "$HM/a")
-bc "$HM/a/src" add alpha
-check "add alpha in a subfolder of a brain project: registered, exit 0" \
+bc "$HM/plain" add alpha "$HM/a"
+check "add alpha <folder>: registers <folder>/STATUS.md, exit 0" \
   eval '[ $rc = 0 ] && has "$out" "Registered brain \"alpha\"" && has "$out" "/brain alpha"'
 check "registry: version 2, alpha -> its folder and its STATUS file's name" \
   reg "d['version'] == 2 and b['alpha'] == {'dir': '$HM/a', 'status': 'STATUS.md'}"
-check "add left the project's files untouched" [ "$(tree "$HM/a")" = "$before_a" ]
-bc "$HM/plain" add beta "$HM/b"
-check "add beta <folder>: registers that folder's brain (dir: the folder of the STATUS its pointer names)" \
+check "add left the brain's files untouched" [ "$(tree "$HM/a")" = "$before_a" ]
+bc "$HM/plain" add beta "$HM/b/notes/STATUS.md"
+check "add beta <STATUS file>: dir is the file's folder, status its name" \
   reg "b['beta'] == {'dir': '$HM/b/notes', 'status': 'STATUS.md'}"
-bc "$HM" add gamma c/sub
+bc "$HM" add gamma c
 check "add with a relative folder: resolved from the current folder" reg "b['gamma']['dir'] == '$HM/c'"
 cp "$REG" "$T/reg.before"
-bc "$HM/a" add alpha
+bc "$HM/plain" add alpha "$HM/a"
 check "add the same brain under the same name again: says so, registry unchanged" \
   eval '[ $rc = 0 ] && has "$out" "already registered" && cmp -s "$REG" "$T/reg.before"'
-bc "$HM/b" add alpha
+bc "$HM/plain" add alpha "$HM/b/notes"
 check "add a name taken by another brain: refused (exit 0), registry unchanged" \
   eval '[ $rc = 0 ] && has "$out" "brain: " && has "$out" "alpha" && cmp -s "$REG" "$T/reg.before"'
 for n in Bad_Name -x "$(printf 'x%.0s' $(seq 1 33))" none auto add new rename remove help list; do
-  bc "$HM/c" add "$n"
+  bc "$HM/c" add "$n" "$HM/c"
   check "add with name '${n:0:12}': refused (not a name, or reserved), registry unchanged" \
     eval '[ $rc = 0 ] && has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
 done
-bc "$HM/plain/x" add delta
-check "add in a folder with no brain: refused, points to /brain new" \
-  eval 'has "$out" "brain: " && has "$out" "/brain new" && cmp -s "$REG" "$T/reg.before"'
-mkdir -p "$HM/bad/.claude"; echo /etc/hosts > "$HM/bad/.claude/brain"
-bc "$HM/bad" add delta
-check "add where the hooks refuse the pointer: refused with the reason" \
-  eval 'has "$out" "brain: " && has "$out" "relative" && cmp -s "$REG" "$T/reg.before"'
+bc "$HM/plain" add delta "$HM/b"
+check "add <folder> with no STATUS.md in it: refused, says to name the file or use /brain new --at" \
+  eval 'has "$out" "brain: " && has "$out" "STATUS.md" && has "$out" "--at" && cmp -s "$REG" "$T/reg.before"'
 bc "$HM/plain" add delta "$HM/nowhere"
-check "add with a missing folder: refused" eval 'has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
+check "add with a missing path: refused" eval 'has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
+printf 'A\000B\n' > "$HM/c/bin.md"
+bc "$HM/plain" add delta "$HM/c/bin.md"
+check "add a STATUS file the hooks would refuse (binary): refused with the reason" \
+  eval 'has "$out" "brain: " && has "$out" "not text" && cmp -s "$REG" "$T/reg.before"'
+printf 'home status\n' > "$HM/HOME-STATUS.md"
+bc "$HM/plain" add delta "$HM/HOME-STATUS.md"
+check "add a STATUS file directly in \$HOME: refused (the folder may not be \$HOME)" \
+  eval 'has "$out" "brain: " && has "$out" "home folder" && cmp -s "$REG" "$T/reg.before"'
+bc "$HM/plain/x" add delta
+check "add <name> with no path in a folder with no old pointer: refused, says to name the folder or STATUS file" \
+  eval 'has "$out" "brain: " && has "$out" "/brain add delta <folder|STATUS file>" && has "$out" "/brain new" && cmp -s "$REG" "$T/reg.before"'
 bc "$HM/a" add
-check "add without a name: usage, exit 0" eval '[ $rc = 0 ] && has "$out" "usage" && has "$out" "add <name> [folder]"'
+check "add without a name: usage, exit 0" eval '[ $rc = 0 ] && has "$out" "usage" && has "$out" "add <name> <folder|STATUS file>"'
+
+# --- add <name> with no path: migrate an old .claude/brain pointer in the current folder ---------------------------
+mkdir -p "$HM/m/.claude" "$HM/m/phase-a" "$HM/m/src"; printf 'status-of-m\n' > "$HM/m/phase-a/STATUS.md"
+echo phase-a/STATUS.md > "$HM/m/.claude/brain"; before_m=$(tree "$HM/m")
+bc "$HM/m" add em
+check "add em in a folder with an old pointer: registers the STATUS it names (dir: that file's folder)" \
+  eval '[ $rc = 0 ] && has "$out" "Registered brain \"em\"" && reg "b[\"em\"] == {\"dir\": \"$HM/m/phase-a\", \"status\": \"STATUS.md\"}"'
+check "... and says the pointer is no longer read and can be deleted, leaving it in place" \
+  eval 'has "$out" "$HM/m/.claude/brain" && has "$out" "no longer read" && has "$out" "delete" && [ "$(tree "$HM/m")" = "$before_m" ]'
+bc "$HM/m/src" add em2
+check "add with no path in a subfolder of it: refused (only the current folder's pointer is used)" \
+  eval 'has "$out" "brain: " && ! reg "\"em2\" in b"'
+mkdir -p "$HM/bad/.claude"; echo /etc/hosts > "$HM/bad/.claude/brain"
+cp "$REG" "$T/reg.before"
+bc "$HM/bad" add delta
+check "add with no path, old pointer the hooks would have refused: refused with the reason" \
+  eval 'has "$out" "brain: " && has "$out" "relative" && cmp -s "$REG" "$T/reg.before"'
+# The pointer is untrusted (a cloned repo's): read as the hooks used to read it, only its first 4,096 bytes.
+PT="$HM/pt"; mkdir -p "$PT/.claude"; printf 'status-of-pt\n' > "$PT/STATUS.md"
+writef() { python3 -I -c 'import sys; open(sys.argv[1], "w").write(eval(sys.argv[2]))' "$PT/.claude/brain" "$1"; }
+printf '\357\273\277STATUS.md\r\n' > "$PT/.claude/brain"; bc "$PT" add pt1
+check "old pointer with a UTF-8 BOM and CRLF: read" reg "b['pt1'] == {'dir': '$PT', 'status': 'STATUS.md'}"
+writef '"a" * 1000000'
+start=$(python3 -I -c 'import time; print(time.time())'); bc "$PT" add pt2
+ms=$(python3 -I -c "import time; print(int((time.time() - $start) * 1000))")
+check "old pointer with a 1 MB path line: refused as naming no file, in ${ms} ms (limit 2,000)" \
+  eval 'has "$out" "names no file" && ! reg "\"pt2\" in b" && [ "$ms" -lt 2000 ]'
+writef '"a" * 1025 + "\n"'; bc "$PT" add pt2
+check "old pointer path line of 1,025 bytes: refused" eval 'has "$out" "names no file" && ! reg "\"pt2\" in b"'
+writef '"#\n" * 2100 + "STATUS.md\n"'; bc "$PT" add pt2
+check "old pointer path line after 4,096 bytes of comments: not read" eval 'has "$out" "names no file" && ! reg "\"pt2\" in b"'
+writef '"#" * 4086 + "\nSTATUS.md.old\n"'; bc "$PT" add pt2
+check "old pointer path line cut at byte 4,096: refused, never read as the shorter path" \
+  eval 'has "$out" "names no file" && ! reg "\"pt2\" in b"'
+writef '"#" * 4085 + "\nSTATUS.md\n"'; bc "$PT" add pt2
+check "old pointer path line whose newline is byte 4,096: read" reg "'pt2' in b"
+rm -f "$PT/.claude/brain"; mkfifo "$PT/.claude/brain"; bc "$PT" add pt3
+check "old pointer that is a FIFO: not opened, no hang, refused" eval '[ $rc = 0 ] && has "$out" "brain: " && ! reg "\"pt3\" in b"'
+rm -f "$PT/.claude/brain"
 
 # --- list --------------------------------------------------------------------------------------------------------------
 bc "$HM/plain/x"
@@ -195,14 +244,17 @@ bc "$HM/plain"
 check "the list's closing line no longer names /brain auto" eval '! has "$out" "/brain auto"'
 bc "$HM/a" beta
 
-# --- rename and remove: registry only --------------------------------------------------------------------------------
+# --- rename and remove: the registry (rename also moves the compaction logs) ---------------------------------------
 before_b=$(tree "$HM/b")
+mkdir -p "$CFG/brain-logs/beta"; echo log > "$CFG/brain-logs/beta/2026-01-01-000000-abcdef12.md"
 bc "$HM/plain" rename beta bravo
 check "rename beta bravo: registry entry renamed, same paths" \
   eval '[ $rc = 0 ] && reg "\"beta\" not in b and b[\"bravo\"][\"dir\"] == \"$HM/b/notes\""'
 check "rename: this window's choice of beta now reads bravo" eval '[ "$(head -n 1 "$SES/pid-$$")" = bravo ]'
+check "rename: its compaction logs move to brain-logs/bravo, and it says so" \
+  eval '[ -f "$CFG/brain-logs/bravo/2026-01-01-000000-abcdef12.md" ] && [ ! -e "$CFG/brain-logs/beta" ] && has "$out" "$CFG/brain-logs/bravo"'
 check "rename: the hooks still load the brain in this window" eval 'has "$(hookout "$HM/a")" "(brain \"bravo\", chosen with /brain)"'
-check "rename: project files untouched" [ "$(tree "$HM/b")" = "$before_b" ]
+check "rename: the brain's files untouched" [ "$(tree "$HM/b")" = "$before_b" ]
 cp "$REG" "$T/reg.before"
 bc "$HM/plain" rename alpha bravo
 check "rename to a name in use: refused, registry unchanged" eval 'has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
@@ -210,9 +262,16 @@ bc "$HM/plain" rename nope x1
 check "rename an unregistered name: refused" eval 'has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
 bc "$HM/plain" rename alpha none
 check "rename to a reserved name: refused" eval 'has "$out" "brain: " && cmp -s "$REG" "$T/reg.before"'
+mkdir -p "$CFG/brain-logs/gamma" "$CFG/brain-logs/gamma9"; echo old > "$CFG/brain-logs/gamma/x.md"
+bc "$HM/plain" rename gamma gamma9
+check "rename when brain-logs/<new> already exists: the logs stay under the old name, and it says so" \
+  eval '[ -f "$CFG/brain-logs/gamma/x.md" ] && has "$out" "$CFG/brain-logs/gamma" && has "$out" "already exists"'
+bc "$HM/plain" rename gamma9 gamma
 bc "$HM/plain" remove bravo
 check "remove bravo: entry gone, others kept" eval '[ $rc = 0 ] && reg "\"bravo\" not in b and \"alpha\" in b"'
-check "remove: project files untouched" [ "$(tree "$HM/b")" = "$before_b" ]
+check "remove: says its files and its compaction logs stay" \
+  eval 'has "$out" "$HM/b/notes" && has "$out" "$CFG/brain-logs/bravo" && [ -f "$CFG/brain-logs/bravo/2026-01-01-000000-abcdef12.md" ]'
+check "remove: the brain's files untouched" [ "$(tree "$HM/b")" = "$before_b" ]
 check "remove: a window that chose it gets one warning line from the hook, no STATUS" \
   eval 'o=$(hookout "$HM/a"); has "$o" "not loaded" && has "$o" "bravo" && ! has "$o" status-of'
 cp "$REG" "$T/reg.before"
@@ -223,44 +282,61 @@ check "remove an unregistered name: refused, registry unchanged" eval 'has "$out
 python3 -I -c 'import json, sys
 d = json.load(open(sys.argv[1])); d["note"] = "kept"; d["brains"]["odd"] = {"root": 5}
 json.dump(d, open(sys.argv[1], "w"))' "$REG"
-bc "$HM/d" add delta
+bc "$HM/d" add delta "$HM/d"
 check "add keeps other keys and entries it does not understand" eval 'reg "d[\"note\"] == \"kept\" and b[\"odd\"] == {\"root\": 5} and \"delta\" in b"'
 printf '{"version": 1, "brains": ' > "$REG"; cp "$REG" "$T/reg.broken"
-bc "$HM/c" add echo
+bc "$HM/c" add echo "$HM/c"
 check "add with a broken registry: refused, file left as it was" \
   eval '[ $rc = 0 ] && has "$out" "brain: " && cmp -s "$REG" "$T/reg.broken"'
 rm -f "$REG"; mkfifo "$REG"
-bc "$HM/c" add echo
+bc "$HM/c" add echo "$HM/c"
 check "add when the registry is a FIFO: refused without blocking" eval '[ $rc = 0 ] && has "$out" "brain: " && [ -p "$REG" ]'
 rm -f "$REG"
 CD2="$T/other config"
-bc "$HM/c" CLAUDE_CONFIG_DIR="$CD2" add echo
+bc "$HM/c" CLAUDE_CONFIG_DIR="$CD2" add echo "$HM/c"
 check "CLAUDE_CONFIG_DIR: the registry is written there" \
   eval '[ -f "$CD2/brains.json" ] && [ ! -e "$REG" ] && grep -q echo "$CD2/brains.json"'
 
-# --- new ---------------------------------------------------------------------------------------------------------------
-mkdir -p "$HM/fresh"
-bc "$HM/plain" new fresh "$HM/fresh"
-check "new fresh <folder>: init-brain ran (STATUS, overview, pointer) and the brain is registered" \
-  eval '[ $rc = 0 ] && [ -f "$HM/fresh/STATUS.md" ] && [ -f "$HM/fresh/00-Project-Overview.md" ] && [ -f "$HM/fresh/.claude/brain" ] && reg "b[\"fresh\"] == {\"dir\": \"$HM/fresh\", \"status\": \"STATUS.md\"}"'
-check "new: shows init-brain's summary and the registration" eval 'has "$out" "Project brain for $HM/fresh" && has "$out" "Registered brain \"fresh\""'
-mkdir -p "$HM/fresh2"
-bc "$HM/plain" new fresh "$HM/fresh2"
-check "new with a name in use: refused before init-brain runs (no files made)" \
-  eval 'has "$out" "brain: " && [ -z "$(ls -A "$HM/fresh2")" ]'
-bc "$HM/plain" new fresh3 "$HM/missing"
-check "new with a missing folder: refused, nothing registered" eval 'has "$out" "not a directory" && ! reg "\"fresh3\" in b"'
-bc "$HM/plain" new fresh3 "$HM"
-check "new in the home folder: init-brain refuses, nothing registered" eval '! reg "\"fresh3\" in b"'
-bc "$HM/plain" new fresh3
-check "new without a folder: usage" eval '[ $rc = 0 ] && has "$out" "usage" && has "$out" "new <name> <folder>"'
+# --- new: create a brain, register it, attach it to this window -----------------------------------------------------
+bc "$HM/plain" new fresh
+check "new fresh: STATUS and overview in <config>/brains/fresh, registered there, exit 0" \
+  eval '[ $rc = 0 ] && [ -f "$CFG/brains/fresh/STATUS.md" ] && [ -f "$CFG/brains/fresh/00-Project-Overview.md" ] && reg "b[\"fresh\"] == {\"dir\": \"$CFG/brains/fresh\", \"status\": \"STATUS.md\"}"'
+check "new: nothing written in the current folder, no pointer anywhere" \
+  eval '[ -z "$(ls -A "$HM/plain" | grep -v "^x$")" ] && [ ! -e "$CFG/brains/fresh/.claude" ]'
+check "new: attached to this window, its STATUS printed" \
+  eval '[ "$(head -n 1 "$SES/pid-$$")" = fresh ] && has "$out" "This window now uses brain \"fresh\"" && has "$out" "fresh — STATUS"'
+check "the hooks now load it in this window" eval 'has "$(hookout "$HM/plain")" "fresh — STATUS"'
+mkdir -p "$HM/repo"
+bc "$HM/plain" new atb --at "$HM/repo/brain"
+check "new <name> --at <folder>: made there (folder created inside an existing parent), registered, attached" \
+  eval '[ -f "$HM/repo/brain/STATUS.md" ] && reg "b[\"atb\"][\"dir\"] == \"$HM/repo/brain\"" && [ "$(head -n 1 "$SES/pid-$$")" = atb ]'
+bc "$HM/plain" new atb2 --at '~/repo2'
+check "new --at with a ~/ folder: taken from \$HOME" eval '[ -f "$HM/repo2/STATUS.md" ] && reg "\"atb2\" in b"'
+cp "$SES/pid-$$" "$T/choice.before"
+bc "$HM/plain" new fresh --at "$HM/fresh2"
+check "new with a name in use: refused before anything is made" \
+  eval 'has "$out" "brain: " && [ ! -e "$HM/fresh2" ] && cmp -s "$SES/pid-$$" "$T/choice.before"'
+bc "$HM/plain" new fresh3 --at "$HM/missing/deep"
+check "new --at a folder whose parent is missing: refused, nothing registered or attached" \
+  eval '! reg "\"fresh3\" in b" && [ ! -e "$HM/missing" ] && cmp -s "$SES/pid-$$" "$T/choice.before"'
+bc "$HM/plain" new fresh3 --at "$HM"
+check "new --at the home folder: init-brain refuses, nothing registered" eval '! reg "\"fresh3\" in b"'
+mkdir -p "$HM/has"; printf 's\n' > "$HM/has/STATUS.md"; before=$(tree "$HM/has")
+bc "$HM/plain" new has --at "$HM/has"
+check "new --at a folder that already holds a STATUS.md: refused, points to /brain add, nothing changed" \
+  eval 'has "$out" "brain: " && has "$out" "/brain add has" && [ "$(tree "$HM/has")" = "$before" ] && ! reg "\"has\" in b"'
+bc "$HM/plain" new fresh3 "$HM/x"
+check "new <name> <folder> without --at: usage" eval '[ $rc = 0 ] && has "$out" "usage" && has "$out" "new <name> [--at <folder>]"'
+out=$(cd "$HM/plain" && env -u CLAUDE_PID HOME="$HM" bash "$B" new outside 2>&1)
+check "new outside Claude Code (no window): made and registered, says it could not attach it" \
+  eval '[ -f "$CFG/brains/outside/STATUS.md" ] && reg "\"outside\" in b" && has "$out" "brain: " && has "$out" CLAUDE_PID'
 
 # --- an entry is its folder: add updates it for the same folder or a folder that is gone ---------------------------
-mkdir -p "$HM/mv/.claude"; printf 'status-of-mv\n' > "$HM/mv/STATUS.md"; echo STATUS.md > "$HM/mv/.claude/brain"
-bc "$HM/mv" add mv
+mkdir -p "$HM/mv"; printf 'status-of-mv\n' > "$HM/mv/STATUS.md"
+bc "$HM/plain" add mv "$HM/mv"
 bc "$HM/plain" mv
-printf 'status-of-mv-next\n' > "$HM/mv/NEXT.md"; echo NEXT.md > "$HM/mv/.claude/brain"
-bc "$HM/mv" add mv
+printf 'status-of-mv-next\n' > "$HM/mv/NEXT.md"
+bc "$HM/plain" add mv "$HM/mv/NEXT.md"
 check "add mv again for the same folder, another STATUS file: updates the entry's STATUS instead of refusing" \
   eval '[ $rc = 0 ] && has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"dir\": \"$HM/mv\", \"status\": \"NEXT.md\"}"'
 # A brain folder that moved: the messages say how to fix it, and add points the entry at the new place.
@@ -270,10 +346,10 @@ check "list: a brain whose folder is gone says how to fix it" \
   eval 'has "$out" "names a missing folder" && has "$out" "/brain add mv <folder>"'
 check "hook in a window that chose it: the warning says how to fix it too" \
   eval 'has "$(hookout "$HM/plain")" "/brain add mv <folder>"'
-bc "$HM/plain" add mv "$HM/mv2"
-check "add mv <new folder> when its old folder is gone: the entry moves there" \
+bc "$HM/plain" add mv "$HM/mv2/NEXT.md"
+check "add mv <its STATUS in the new folder> when its old folder is gone: the entry moves there" \
   eval 'has "$out" "Updated brain \"mv\"" && reg "b[\"mv\"] == {\"dir\": \"$HM/mv2\", \"status\": \"NEXT.md\"}"'
-mkdir -p "$HM/mv3/.claude"; printf 's\n' > "$HM/mv3/STATUS.md"; echo STATUS.md > "$HM/mv3/.claude/brain"
+mkdir -p "$HM/mv3"; printf 's\n' > "$HM/mv3/STATUS.md"
 cp "$REG" "$T/reg.before"
 bc "$HM/plain" add mv "$HM/mv3"
 check "add mv <another folder> while its own folder still exists: refused, registry unchanged" \
@@ -283,7 +359,7 @@ check "add mv <another folder> while its own folder still exists: refused, regis
 # bca <cwd> <raw>: run brain.sh --args with <raw> on stdin, as the skill's quoted heredoc passes $ARGUMENTS.
 bca() { out=$(cd "$1" && printf '%s\n' "$2" | env HOME="$HM" CLAUDE_PID=$$ perl -e 'alarm shift; exec @ARGV' 30 \
   bash "$B" --args 2>&1); rc=$?; }
-mkdir -p "$HM/My Proj/.claude"; printf 'status-of-space\n' > "$HM/My Proj/STATUS.md"; echo STATUS.md > "$HM/My Proj/.claude/brain"
+mkdir -p "$HM/My Proj"; printf 'status-of-space\n' > "$HM/My Proj/STATUS.md"
 bca "$HM/plain" "add sp '~/My Proj'"
 check "--args: a quoted ~/path with a space is one argument, ~ expanded" \
   eval '[ $rc = 0 ] && has "$out" "Registered brain \"sp\"" && reg "b[\"sp\"][\"dir\"] == \"$HM/My Proj\""'
@@ -303,7 +379,7 @@ bca "$HM/plain" "add x Bob's"
 check "--args: an unmatched quote: one clear error, exit 0" \
   eval '[ $rc = 0 ] && has "$out" "brain: " && has "$out" "quote" && cmp -s "$REG" "$T/reg.before"'
 bca "$HM/plain" ""
-check "--args with nothing: the list" has "$out" "Named brains"
+check "--args with nothing: the list" has "$out" "Brains (registry"
 bca "$HM/plain" "  help  "
 check "--args: surrounding spaces ignored" has "$out" "usage: /brain"
 bca "$HM/plain" "$(printf 'x%.0s' $(seq 1 5000))"
@@ -324,7 +400,7 @@ check "list never rewrites the registry" cmp -s "$REG" "$T/reg.v1"
 bc "$HM/plain" old
 check "/brain <name> on a version 1 registry: attaches it" has "$out" 'This window now uses brain "old"'
 check "attaching never rewrites the registry" cmp -s "$REG" "$T/reg.v1"
-bc "$HM/d" add v1new
+bc "$HM/d" add v1new "$HM/d"
 check "add on a version 1 registry: written as version 2, entries converted, unknown keys and unusable entries kept" \
   reg "d['version'] == 2 and d['note'] == 'kept' and b['old'] == {'dir': '$HM/c', 'status': 'STATUS.md'} and b['half'] == {'root': '/x'} and 'v1new' in b"
 cp "$T/reg.keep" "$REG"; bc "$HM/plain" none
@@ -351,7 +427,7 @@ NOPY="$T/bin-without-python"; mkdir -p "$NOPY"
 for c in bash cat dirname basename readlink tr wc head tail od awk ps perl env date find sed cut paste mktemp mv rm \
          chmod mkdir sort grep xargs true; do p=$(command -v "$c") && ln -s "$p" "$NOPY/$c"; done
 out=$(cd "$HM/plain" && env PATH="$NOPY" HOME="$HM" CLAUDE_PID=$$ "$NOPY/bash" "$B" 2>&1)
-check "list without python3: says named brains need python3, and does not blame the registry" \
+check "list without python3: says brains need python3, and does not blame the registry" \
   eval 'has "$out" "need python3" && ! has "$out" "fix it or move it aside"'
 out=$(cd "$HM/plain" && env PATH="$NOPY" HOME="$T/empty-home" CLAUDE_PID=$$ "$NOPY/bash" "$B" 2>&1)
 check "list without python3 and no registry: no python3 line" eval '! has "$out" "python3" && has "$out" "This window uses"'
@@ -367,11 +443,6 @@ cp "$T/reg.keep" "$REG"
 bc "$HM/plain" rename sp sp
 check "rename to the same name: says so, registry unchanged" \
   eval 'has "$out" "same name" && ! has "$out" "already used" && cmp -s "$REG" "$T/reg.keep"'
-mkdir -p "$HM/has/.claude" "$HM/has/phase-a"; printf 's\n' > "$HM/has/phase-a/STATUS.md"; echo phase-a/STATUS.md > "$HM/has/.claude/brain"
-before=$(tree "$HM/has")
-bc "$HM/plain" new has "$HM/has"
-check "new on a folder that already has a brain: refused, no stray files, points to /brain add" \
-  eval 'has "$out" "brain: " && has "$out" "/brain add has" && [ "$(tree "$HM/has")" = "$before" ] && cmp -s "$REG" "$T/reg.keep"'
 rm -f "$SES/pid-$$"; mkdir -p "$SES/pid-$$"
 bc "$HM/a" none
 check "a folder where the choice file goes: /brain none fails with a message, not a false success" \
@@ -388,7 +459,7 @@ fi
 # --- help and unknown words ------------------------------------------------------------------------------------------
 bc "$HM/plain" help
 all_in() { local t="$1"; shift; for w in "$@"; do has "$t" "$w" || return 1; done; }
-check "help: shows every form, exit 0" eval '[ $rc = 0 ] && all_in "$out" "/brain <name>" "/brain none" "add <name> [folder]" "new <name> <folder>" "rename <old> <new>" "remove <name>"'
+check "help: shows every form, exit 0" eval '[ $rc = 0 ] && all_in "$out" "/brain <name>" "/brain none" "add <name> <folder|STATUS file>" "new <name> [--at <folder>]" "rename <old> <new>" "remove <name>"'
 bc "$HM/plain" remove
 check "remove without a name: usage, exit 0" eval '[ $rc = 0 ] && has "$out" "usage"'
 

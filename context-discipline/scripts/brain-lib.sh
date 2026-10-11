@@ -6,8 +6,8 @@
 #      pid-$CLAUDE_PID (the Claude Code process, so the choice survives /clear and compaction), else
 #      sid-<session id>;
 #   2. CD_BRAIN=<name> or CD_BRAIN=none in the environment;
-#   3. else no brain. The session's folder plays no part: the hooks never read a .claude/brain pointer (only
-#      /brain add reads one, to register an old folder brain; cd_find_brain and cd_check_pointer are for that).
+#   3. else no brain. The session's folder plays no part: nothing here reads a .claude/brain pointer (only
+#      /brain add does, in brain.sh, to register the brain an old pointer names).
 # A name is looked up in the registry <config>/brains.json:
 #   {"version": 2, "brains": {"<name>": {"dir": "<abs brain folder>", "status": "<STATUS file, relative to dir>"}}}
 # A version 1 registry ({"root": "<project folder>", "status": "<abs STATUS file>"}) is read as if each entry's dir
@@ -16,8 +16,6 @@
 # folder, and that folder is neither $HOME nor "/".
 # Never writes files, never touches the network.
 
-CD_POINTER_READ=4096   # bytes of a pointer that are read (the refusal reasons below say 4,096)
-CD_PATH_MAX=1024       # bytes in its path line, PATH_MAX on macOS (the refusal reasons say 1,024)
 CD_CHOICE_READ=1024    # bytes of a window's choice file that are read
 CD_REGISTRY_CAP=1000000   # bytes; a larger registry is not read (the refusal reasons say 1,000,000)
 
@@ -47,33 +45,6 @@ cd_input_ok() {
   ! { command -v jq || command -v python3; } >/dev/null 2>&1
 }
 
-# cd_find_brain <cwd>: walk up from <cwd> to the nearest <dir>/.claude/brain, stopping before $HOME and "/".
-# Both <cwd> and $HOME are compared with every symlink and ".." resolved, so neither a symlinked HOME nor
-# "x/.." reaches ~/.claude. Sets CD_POINTER (the pointer file) and CD_ROOT (<dir>, symlinks resolved).
-# Fails if <cwd> is not an absolute path to an existing folder, or no pointer is found, or if the environment
-# sets CD_HOOKS=off (all the hooks then act as outside a brain project: for headless runs and benchmarks).
-cd_find_brain() {
-  local cwd="$1" home dir
-  CD_POINTER=""; CD_ROOT=""
-  [ "${CD_HOOKS:-}" = off ] && return 1
-  case "$cwd" in
-    /*) ;;
-    *) return 1 ;;
-  esac
-  cwd=$(cd -P -- "$cwd" 2>/dev/null && pwd -P) || return 1
-  home=$(cd -P -- "${HOME:-/}" 2>/dev/null && pwd -P) || home="${HOME%/}"
-  dir="${cwd%/}"
-  while [ -n "$dir" ] && [ "$dir" != "$home" ]; do
-    if [ -f "$dir/.claude/brain" ]; then
-      CD_POINTER="$dir/.claude/brain"
-      CD_ROOT="$dir"
-      return 0
-    fi
-    dir="${dir%/*}"   # the parent; "/" itself becomes "" and ends the walk
-  done
-  return 1
-}
-
 # cd_physical <path>: <path> with every symlink resolved, its last part included. Fails if a folder is missing.
 cd_physical() {
   local p="$1" d b t n=0
@@ -88,49 +59,6 @@ cd_physical() {
     case "$t" in /*) p="$t" ;; *) p="$d/$t" ;; esac
   done
   printf '%s\n' "$p"
-}
-
-# cd_check_pointer: read the STATUS path from $CD_POINTER and accept it only if it is a text file inside
-# $CD_ROOT. Sets LC_ALL=C for the rest of the script (bytes are counted and matched from here on).
-# On success sets CD_REL (the path as the pointer gives it), CD_STATUS (the file, symlinks resolved) and
-# CD_SIZE (its size in bytes).
-# Returns 1 with CD_REFUSED set to the reason (to follow "<pointer> ") if the pointer is refused,
-# 2 if the project folder cannot be read at all.
-cd_check_pointer() {
-  local line="" rel="" size text ended=0 more=""
-  LC_ALL=C; export LC_ALL
-  CD_REL=""; CD_STATUS=""; CD_SIZE=""; CD_REFUSED=""
-  # Only the first $CD_POINTER_READ bytes are read. The pointer is a regular file (cd_find_brain checks with -f),
-  # so opening it cannot block; the cap keeps a huge pointer from costing memory or (bash 3.2 trims strings in
-  # quadratic time) seconds of CPU.
-  while :; do
-    if IFS= read -r line; then ended=1; elif [ -n "$line" ]; then ended=0; else break; fi
-    line="${line%$'\r'}"
-    line="${line#$'\357\273\277'}"            # drop a UTF-8 byte-order mark
-    line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
-    line="${line%"${line##*[![:space:]]}"}"   # trim trailing whitespace
-    case "$line" in
-      ''|'#'*) continue ;;
-    esac
-    rel="$line"
-    break
-  done < <(head -c "$CD_POINTER_READ" -- "$CD_POINTER" 2>/dev/null)
-  size=$(wc -c < "$CD_POINTER" 2>/dev/null | tr -d '[:space:]')
-  case "$size" in ''|*[!0-9]*) size=0 ;; esac
-  [ "$size" -gt "$CD_POINTER_READ" ] && more=" in its first 4,096 bytes"
-  # A line without a newline is whole only if the file ends there; one cut by the read is never used.
-  if [ -n "$rel" ] && { [ "${#rel}" -gt "$CD_PATH_MAX" ] || { [ "$ended" = 0 ] && [ -n "$more" ]; }; }; then
-    CD_REFUSED="names no file: its path line must be at most 1,024 bytes and end within its first 4,096"; return 1
-  fi
-  [ -n "$rel" ] || { CD_REFUSED="names no file$more"; return 1; }
-  case "$rel" in
-    /*|'~'*) CD_REFUSED="must name its STATUS file by a path relative to its project folder"; return 1 ;;
-  esac
-  CD_ROOT=$(cd -P -- "$CD_ROOT" 2>/dev/null && pwd -P) || return 2
-  CD_DIR="$CD_ROOT"
-  cd_check_status "$CD_ROOT/$rel" || return $?
-  CD_REL="$rel"
-  return 0
 }
 
 # cd_check_status <path>: accept <path> as the STATUS file of the brain folder $CD_DIR (symlinks already
@@ -380,7 +308,7 @@ cd_registry_get() {
 # Returns 1 with CD_REFUSED set if it is refused, 2 if the STATUS cannot be measured.
 cd_check_brain() {
   local home name="${3:-<name>}"
-  CD_DIR=""; CD_ROOT=""
+  CD_DIR=""
   case "$1" in /*) ;; *) CD_REFUSED="must name its folder by an absolute path; /brain add $name <folder> replaces it"; return 1 ;; esac
   CD_DIR=$(cd -P -- "$1" 2>/dev/null && pwd -P) || {
     CD_DIR=""
@@ -395,7 +323,6 @@ cd_check_brain() {
   case "$2" in
     /*|'~'*) CD_REFUSED="must name its STATUS file by a path relative to its folder"; return 1 ;;
   esac
-  CD_ROOT="$CD_DIR"
   cd_check_status "$CD_DIR/$2"
 }
 
@@ -407,8 +334,7 @@ cd_check_brain() {
 # nothing at all (CD_HOOKS=off, or the input is not a JSON object).
 cd_select_brain() {
   local key name
-  CD_HOW=""; CD_NAME=""; CD_SUBJECT=""; CD_REFUSED=""; CD_ROOT=""; CD_DIR=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""
-  CD_POINTER=""
+  CD_HOW=""; CD_NAME=""; CD_SUBJECT=""; CD_REFUSED=""; CD_DIR=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""
   [ "${CD_HOOKS:-}" = off ] && return 3
   cd_input_ok "$1" || return 3
   LC_ALL=C; export LC_ALL
