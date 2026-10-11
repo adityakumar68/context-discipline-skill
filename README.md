@@ -323,12 +323,15 @@ rules. Two of the three evals are dry runs that grade a written plan. No eval me
 survives a compaction, and the raw run outputs are not published. The skill has been rewritten since. Details and
 corrected scores: [evals/RESULTS.md](evals/RESULTS.md); how to re-run: [evals/README.md](evals/README.md).
 
-## Benchmark (in progress)
+## Does it help?
 
-An outcome benchmark is being designed: repeated multi-session tasks run with and without the skill, measured with
-`ctx-audit.py --json` and by whether the work survives compactions and new sessions. It has no results yet, and
-nothing in this README depends on it. Its runs without the skill set `CD_HOOKS=off` (see Uninstalling), so a global
-install does not leak into them.
+Not measured yet. The tests check that the scripts do what this README says; they do not show that the skill makes
+the work Claude produces better. An outcome benchmark (the same multi-session task run with and without the skill)
+was designed but has not been run.
+
+To judge it on your own work: run `ctx-audit.py --json` on a few sessions from before you installed it and a few
+after, and compare the main thread's peak context, compactions per hour, and whether a fresh session picks up where
+the last one stopped. To compare against the skill switched off, set `CD_HOOKS=off` (see Uninstalling).
 
 ## Tests
 
