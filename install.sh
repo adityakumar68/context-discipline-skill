@@ -20,7 +20,9 @@ Usage: ./install.sh [--dry-run] [--uninstall] [--skip-claude-md] [-h|--help]
 Installs the context-discipline skill for Claude Code into $CLAUDE_CONFIG_DIR, or ~/.claude if that is unset:
   1. Skill:     copies context-discipline/ to <dir>/skills/context-discipline/
                 (an existing copy that differs is first moved to <dir>/skill-backups/)
-  2. Hooks:     adds three hooks to <dir>/settings.json, each in one entry with no matcher (older
+  2. /brain:    copies brain/ to <dir>/skills/brain/, the /brain command that lists, picks and registers
+                named brains (same backup rule; a different skill already called "brain" is left alone)
+  3. Hooks:     adds three hooks to <dir>/settings.json, each in one entry with no matcher (older
                 entries for the same hook are replaced), running skills/context-discipline/scripts/...
                   SessionStart     brain-hook.sh   every source (startup, resume, clear, compact, fork):
                                                    prints the project's STATUS file (10-second timeout)
@@ -29,13 +31,13 @@ Installs the context-discipline skill for Claude Code into $CLAUDE_CONFIG_DIR, o
                   UserPromptSubmit ctx-nudge.sh    every prompt: a short note at 40% of the context
                                                    window and every 15% after (5-second timeout)
                 The last two act only in projects with a brain (.claude/brain).
-  3. CLAUDE.md: appends one line telling Claude when to follow the skill
+  4. CLAUDE.md: appends one line telling Claude when to follow the skill
 settings.json and CLAUDE.md are backed up to <file>.bak-<timestamp> before they are changed.
 Steps that are already done are skipped, so running it again is safe. To update: git pull && ./install.sh
 
 Options:
   --dry-run         print every planned change and change nothing
-  --uninstall       remove the skill, the three hooks and the CLAUDE.md line (backups first)
+  --uninstall       remove both skills, the three hooks and the CLAUDE.md line (backups first)
   --skip-claude-md  leave CLAUDE.md alone
   -h, --help        show this help
 EOF
@@ -58,8 +60,11 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required (it edits setting
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 SRC="$REPO_DIR/context-discipline"
-for f in SKILL.md scripts/brain-hook.sh scripts/brain-lib.sh scripts/compact-log.sh scripts/ctx-nudge.sh; do
-  [ -f "$SRC/$f" ] || die "cannot find the skill at $SRC ($f is missing). Run install.sh from a full clone of the repo."
+BRAIN_SRC="$REPO_DIR/brain"
+for f in context-discipline/SKILL.md context-discipline/scripts/brain-hook.sh context-discipline/scripts/brain-lib.sh \
+         context-discipline/scripts/compact-log.sh context-discipline/scripts/ctx-nudge.sh \
+         context-discipline/scripts/brain.sh context-discipline/scripts/init-brain.sh brain/SKILL.md; do
+  [ -f "$REPO_DIR/$f" ] || die "cannot find the skill at $REPO_DIR ($f is missing). Run install.sh from a full clone of the repo."
 done
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-${HOME:?HOME is not set}/.claude}"
@@ -72,6 +77,8 @@ esac
 
 SKILLS_DIR="$CLAUDE_DIR/skills"
 DEST="$SKILLS_DIR/context-discipline"
+BRAIN_DEST="$SKILLS_DIR/brain"
+BRAIN_MARK='context-discipline/scripts/brain.sh'   # in our /brain skill's SKILL.md; tells it from another "brain"
 BACKUP_DIR="$CLAUDE_DIR/skill-backups"   # outside skills/, so Claude Code never loads a backup as a second skill
 SETTINGS="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
@@ -516,61 +523,80 @@ unique_path() {
   printf '%s\n' "$p-$n"
 }
 
+# copy_skill <src> <dest>
 copy_skill() {
   mkdir -p "$SKILLS_DIR"
-  cp -R "$SRC" "$DEST"
-  find "$DEST" \( -name __pycache__ -o -name .DS_Store \) -prune -exec rm -rf {} +
-  chmod +x "$DEST"/scripts/* 2>/dev/null || true
+  cp -R "$1" "$2"
+  find "$2" \( -name __pycache__ -o -name .DS_Store \) -prune -exec rm -rf {} +
+  if [ -d "$2/scripts" ]; then chmod +x "$2"/scripts/* 2>/dev/null || true; fi
 }
 
+# foreign <dest>: true if <dest> is skills/brain but not this repo's /brain skill (someone else's skill of that name,
+# or not a plain folder): it is then never replaced, moved or deleted.
+foreign() {
+  [ "${1##*/}" = brain ] || return 1
+  [ -d "$1" ] && [ ! -L "$1" ] && [ -f "$1/SKILL.md" ] && head -c 4096 "$1/SKILL.md" 2>/dev/null | grep -qF "$BRAIN_MARK" && return 1
+  return 0
+}
+
+# skill_install <src> <dest> <label>
 skill_install() {
-  if [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; then
+  local src="$1" dest="$2" label="$3" saved
+  if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
     if [ "$DRY" = 1 ]; then
-      report "skill:         would copy $SRC to $DEST"
+      report "$label would copy $src to $dest"
     else
-      copy_skill
-      report "skill:         copied to $DEST"
+      copy_skill "$src" "$dest"
+      report "$label copied to $dest"
     fi
     return
   fi
-  if [ -d "$DEST" ] && helper same-tree "$SRC" "$DEST"; then
-    report "skill:         unchanged, $DEST already matches this repo"
+  if [ -d "$dest" ] && helper same-tree "$src" "$dest"; then
+    report "$label unchanged, $dest already matches this repo"
     return
   fi
-  local saved
-  saved=$(unique_path "$BACKUP_DIR/context-discipline.bak-$TS")
+  if foreign "$dest"; then
+    report "$label NOT installed: $dest is another skill, left alone; move it and run again to get /brain"
+    return
+  fi
+  saved=$(unique_path "$BACKUP_DIR/${dest##*/}.bak-$TS")
   if [ "$DRY" = 1 ]; then
-    report "skill:         would move the existing copy to $saved, then copy $SRC to $DEST"
+    report "$label would move the existing copy to $saved, then copy $src to $dest"
   else
     mkdir -p "$BACKUP_DIR"
-    mv "$DEST" "$saved"
-    copy_skill
-    report "skill:         updated $DEST; previous copy moved to $saved"
+    mv "$dest" "$saved"
+    copy_skill "$src" "$dest"
+    report "$label updated $dest; previous copy moved to $saved"
   fi
 }
 
+# skill_uninstall <src> <dest> <label>
 skill_uninstall() {
-  if [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; then
-    report "skill:         unchanged, $DEST is not there"
+  local src="$1" dest="$2" label="$3" saved
+  if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+    report "$label unchanged, $dest is not there"
     return
   fi
-  if [ -d "$DEST" ] && [ ! -L "$DEST" ] && helper same-tree "$SRC" "$DEST"; then
+  if foreign "$dest"; then
+    report "$label unchanged, $dest is another skill, left alone"
+    return
+  fi
+  if [ -d "$dest" ] && [ ! -L "$dest" ] && helper same-tree "$src" "$dest"; then
     if [ "$DRY" = 1 ]; then
-      report "skill:         would delete $DEST (it matches this repo)"
+      report "$label would delete $dest (it matches this repo)"
     else
-      rm -rf "$DEST"
-      report "skill:         deleted $DEST (it matched this repo)"
+      rm -rf "$dest"
+      report "$label deleted $dest (it matched this repo)"
     fi
     return
   fi
-  local saved
-  saved=$(unique_path "$BACKUP_DIR/context-discipline.bak-$TS")
+  saved=$(unique_path "$BACKUP_DIR/${dest##*/}.bak-$TS")
   if [ "$DRY" = 1 ]; then
-    report "skill:         would move $DEST to $saved (it differs from this repo)"
+    report "$label would move $dest to $saved (it differs from this repo)"
   else
     mkdir -p "$BACKUP_DIR"
-    mv "$DEST" "$saved"
-    report "skill:         moved $DEST to $saved (it differed from this repo)"
+    mv "$dest" "$saved"
+    report "$label moved $dest to $saved (it differed from this repo)"
   fi
 }
 
@@ -594,10 +620,12 @@ if [ "$UNINSTALL" = 1 ]; then
     out=$(helper md-remove "$CLAUDE_MD" "$CLAUDE_MD_LINE" "$TS" "$DRY") || die "editing CLAUDE.md failed (see above)."
     report "$out"
   fi
-  skill_uninstall
+  skill_uninstall "$SRC" "$DEST" "skill:        "
+  skill_uninstall "$BRAIN_SRC" "$BRAIN_DEST" "brain skill:  "
 else
   [ "$DRY" = 1 ] || mkdir -p "$CLAUDE_DIR"
-  skill_install
+  skill_install "$SRC" "$DEST" "skill:        "
+  skill_install "$BRAIN_SRC" "$BRAIN_DEST" "brain skill:  "
   out=$(helper settings-install "$SETTINGS" "$SCRIPTS" "$TS" "$DRY") || die "editing settings.json failed (see above)."
   report "$out"
   if [ "$SKIP_MD" = 1 ]; then
@@ -620,7 +648,8 @@ Next steps:
   1. Claude Code picks up the change within a few seconds: open /hooks to check the hooks are gone, and
      restart Claude Code only if they are still listed.
   2. Projects keep their .claude/brain pointer, STATUS.md, overview and .claude/compactions/ logs;
-     delete them in a project if you no longer want them.
+     delete them in a project if you no longer want them. The registry of named brains
+     ($CLAUDE_DIR/brains.json) and the windows' choices ($CLAUDE_DIR/brain-sessions/) stay too.
 To install again: ./install.sh
 EOF
 else
@@ -636,6 +665,8 @@ Next steps:
      context reaches 40% of its window and every 15% after.
   3. Check the SessionStart hook finds it (it prints your STATUS, then a "Project brain loaded from" line):
        echo '{"cwd": "<project-root>/some/subdir", "source": "startup"}' | bash "$HOOK"
+  4. Several projects in one place? In Claude Code, /brain lists the named brains and picks one for the
+     window (/brain help; README: "Several brains").
 To update later: git pull && ./install.sh
 EOF
 fi

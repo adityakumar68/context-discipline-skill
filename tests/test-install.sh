@@ -178,14 +178,14 @@ check "twice: still exactly 1 of each of our 3 hooks (no duplicates)" \
   jq_ "$C/settings.json" 'len(ours()) == 1 and len(ours_of("compact-log.sh")) == 1 and len(ours_of("ctx-nudge.sh")) == 1'
 check "twice: CLAUDE.md line still there once" [ "$(md_lines "$C/CLAUDE.md")" = 1 ]
 check "twice: second run changed nothing at all (no new backups either)" [ "$before" = "$(tree_sum "$C")" ]
-check "twice: summary says every step is unchanged" [ "$(printf '%s\n' "$out" | grep -c ': *unchanged')" = 3 ]
+check "twice: summary says every step is unchanged (both skills, settings, CLAUDE.md)" [ "$(printf '%s\n' "$out" | grep -c ': *unchanged')" = 4 ]
 
 # --- 5. --dry-run changes nothing -----------------------------------------------------------------------------
 H2=$(new_home)
 out=$(inst "$H2" --dry-run 2>&1); rc=$?
 check "dry-run (fresh home): exit 0 and ~/.claude is not even created" eval '[ "$rc" = 0 ] && [ ! -e "$H2/.claude" ]'
-check "dry-run (fresh home): prints the three planned changes" \
-  eval '[ "$(printf "%s\n" "$out" | grep -c "would ")" = 3 ] && printf "%s" "$out" | grep -qF "runs: bash"'
+check "dry-run (fresh home): prints the four planned changes (both skills, settings, CLAUDE.md)" \
+  eval '[ "$(printf "%s\n" "$out" | grep -c "would ")" = 4 ] && printf "%s" "$out" | grep -qF "runs: bash"'
 names_hooks() { local e; for e in SessionStart PostCompact UserPromptSubmit; do printf '%s' "$out" | grep -q "$e runs: bash" || return 1; done; }
 check "dry-run (fresh home): names all three hooks and the commands they run" names_hooks
 H3=$(new_home); mkdir -p "$H3/.claude"; cp "$ROOT/orig-settings.json" "$H3/.claude/settings.json"; cp "$ROOT/orig-claude.md" "$H3/.claude/CLAUDE.md"
@@ -194,8 +194,8 @@ out=$(inst "$H3" --dry-run 2>&1); rc=$?
 check "dry-run (existing settings): exit 0 and checksums identical before/after" eval '[ "$rc" = 0 ] && [ "$before" = "$(tree_sum "$H3")" ]'
 before=$(tree_sum "$C")
 out=$(inst "$H" --uninstall --dry-run 2>&1); rc=$?
-check "dry-run --uninstall: exit 0, plans the removals, checksums identical" \
-  eval '[ "$rc" = 0 ] && [ "$(printf "%s\n" "$out" | grep -c "would ")" = 3 ] && [ "$before" = "$(tree_sum "$C")" ]'
+check "dry-run --uninstall: exit 0, plans the removals (both skills too), checksums identical" \
+  eval '[ "$rc" = 0 ] && [ "$(printf "%s\n" "$out" | grep -c "would ")" = 4 ] && [ "$before" = "$(tree_sum "$C")" ]'
 
 # --- 6. --uninstall leaves everything else intact ---------------------------------------------------------------
 out=$(inst "$H" --uninstall 2>&1); rc=$?
@@ -242,7 +242,7 @@ echo "local edit" >> "$C/skills/context-discipline/SKILL.md"
 inst "$H8" >/dev/null 2>&1; rc=$?
 check "update: installed copy refreshed to match the repo" eval '[ "$rc" = 0 ] && same_tree "$REPO/context-discipline" "$C/skills/context-discipline"'
 check "update: old copy kept in skill-backups/, and skills/ holds only the live skill" \
-  eval '[ "$(count "$C/skill-backups/context-discipline.bak-*")" = 1 ] && grep -q "local edit" "$C"/skill-backups/context-discipline.bak-*/SKILL.md && [ "$(ls "$C/skills")" = context-discipline ]'
+  eval '[ "$(count "$C/skill-backups/context-discipline.bak-*")" = 1 ] && grep -q "local edit" "$C"/skill-backups/context-discipline.bak-*/SKILL.md && [ "$(ls "$C/skills" | paste -sd, -)" = brain,context-discipline ]'
 check "update: hook and CLAUDE.md steps were no-ops" eval 'jq_ "$C/settings.json" "len(ours()) == 1" && [ "$(md_lines "$C/CLAUDE.md")" = 1 ]'
 echo "another edit" >> "$C/skills/context-discipline/SKILL.md"
 inst "$H8" --uninstall >/dev/null 2>&1
@@ -475,6 +475,55 @@ check "install: settings.json with a final newline keeps it" eval '[ "$(lastbyte
 out=$(inst "$H27" --help 2>&1)
 check "--help names the PostCompact and UserPromptSubmit hooks" \
   eval 'printf "%s" "$out" | grep -q PostCompact && printf "%s" "$out" | grep -q UserPromptSubmit'
+
+# --- 18. The /brain skill: a tiny user-invoked skill installed next to context-discipline -------------------------
+H31=$(new_home); C="$H31/.claude"; BR="$C/skills/brain"
+out=$(inst "$H31" 2>&1); rc=$?
+check "/brain skill: copied to skills/brain, identical to the repo's brain/" \
+  eval '[ "$rc" = 0 ] && same_tree "$REPO/brain" "$BR"'
+check "/brain skill: the summary names it" eval 'printf "%s" "$out" | grep -q "^  brain skill: *copied to $BR"'
+check "/brain skill: user-invoked only (disable-model-invocation: true), named brain" \
+  eval 'grep -qx "disable-model-invocation: true" "$BR/SKILL.md" && grep -qx "name: brain" "$BR/SKILL.md"'
+# The skill's one command, as Claude Code runs it: ${CLAUDE_SKILL_DIR} and $ARGUMENTS substituted, then bash.
+bang=$(grep -m1 '^!`' "$BR/SKILL.md" | sed 's/^!`//; s/`$//')
+check "/brain skill: its command runs brain.sh from the installed context-discipline skill with \$ARGUMENTS" \
+  eval 'printf "%s" "$bang" | grep -qF "bash \"\${CLAUDE_SKILL_DIR}/../context-discipline/scripts/brain.sh\" \$ARGUMENTS"'
+run_bang() {   # run_bang <arguments>: the command with the substitutions made, run in a plain folder
+  local cmd="${bang//\$\{CLAUDE_SKILL_DIR\}/$BR}"; cmd="${cmd//\$ARGUMENTS/$1}"
+  (mkdir -p "$H31/work" && cd "$H31/work" && env -u CLAUDE_CONFIG_DIR HOME="$H31" CLAUDE_PID=$$ bash -c "$cmd" 2>&1)
+}
+check "/brain skill: '/brain help' runs the installed script and prints its usage" eval 'run_bang help | grep -q "^usage: /brain"'
+check "/brain skill: '/brain' (no arguments) lists, exit 0" eval 'run_bang "" | grep -q "No named brains yet"'
+# allowed-tools pre-approves exactly that command (with and without arguments), so it runs without a prompt.
+rules=$(sed -n '/^allowed-tools:/,/^[a-z-]*:/p' "$BR/SKILL.md" | sed -n 's/^ *- Bash(\(.*\))$/\1/p')
+check "/brain skill: allowed-tools has a Bash rule for the bare command and one for it with arguments" \
+  eval '[ "$(printf "%s\n" "$rules" | grep -c "")" = 2 ] && printf "%s\n" "$rules" | grep -qxF "${bang% \$ARGUMENTS}" && printf "%s\n" "$rules" | grep -qxF "${bang% \$ARGUMENTS} *"'
+before=$(tree_sum "$C"); out=$(inst "$H31" 2>&1)
+check "/brain skill: a second run leaves it unchanged" \
+  eval '[ "$before" = "$(tree_sum "$C")" ] && printf "%s" "$out" | grep -q "brain skill: *unchanged"'
+echo "local edit" >> "$BR/SKILL.md"; out=$(inst "$H31" 2>&1)
+check "/brain skill: a locally changed copy is moved to skill-backups/ and replaced" \
+  eval 'same_tree "$REPO/brain" "$BR" && grep -q "local edit" "$C"/skill-backups/brain.bak-*/SKILL.md'
+H32=$(new_home); out=$(inst "$H32" --dry-run 2>&1)
+check "/brain skill: --dry-run says it would copy it, and copies nothing" \
+  eval 'printf "%s" "$out" | grep -q "brain skill: *would copy" && [ ! -e "$H32/.claude" ]'
+out=$(inst "$H31" --uninstall 2>&1); rc=$?
+check "/brain skill: --uninstall deletes it (it matches the repo)" \
+  eval '[ "$rc" = 0 ] && [ ! -e "$BR" ] && printf "%s" "$out" | grep -q "brain skill: *deleted"'
+inst "$H31" >/dev/null 2>&1; echo "edit" >> "$BR/SKILL.md"; inst "$H31" --uninstall >/dev/null 2>&1
+check "/brain skill: --uninstall moves a locally changed copy to skill-backups/" \
+  eval '[ ! -e "$BR" ] && [ "$(count "$C/skill-backups/brain.bak-*")" = 2 ]'
+# Someone else's skill that happens to be called "brain" is never moved or deleted.
+H33=$(new_home); C="$H33/.claude"; mkdir -p "$C/skills/brain"
+printf -- '---\nname: brain\ndescription: my own notes skill\n---\nMine.\n' > "$C/skills/brain/SKILL.md"
+before=$(tree_sum "$C/skills/brain"); out=$(inst "$H33" 2>&1); rc=$?
+check "another skill named brain: left untouched, the summary says /brain was not installed, rest installed" \
+  eval '[ "$rc" = 0 ] && [ "$before" = "$(tree_sum "$C/skills/brain")" ] && printf "%s" "$out" | grep -q "brain skill: *NOT installed" && [ -d "$C/skills/context-discipline" ]'
+out=$(inst "$H33" --uninstall 2>&1)
+check "another skill named brain: --uninstall leaves it too" \
+  eval '[ "$before" = "$(tree_sum "$C/skills/brain")" ] && printf "%s" "$out" | grep -q "brain skill: *unchanged"'
+out=$(inst "$H33" --help 2>&1)
+check "--help names the /brain skill" eval 'printf "%s" "$out" | grep -q "skills/brain/"'
 
 echo "== install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]
