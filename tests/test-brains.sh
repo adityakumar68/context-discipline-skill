@@ -102,7 +102,10 @@ cp "$T/reg.keep" "$REG"
 hook "$HM/a/src" CD_BRAIN=b
 check "CD_BRAIN=b inside project a: loads b, not a" eval 'has "$out" status-of-b && ! has "$out" status-of-a'
 check "CD_BRAIN=b: the closing line names the brain and how it was chosen" \
-  has "$out" "(Project brain loaded from $HM/b/notes/STATUS.md (brain \"b\", chosen with CD_BRAIN). Working rules"
+  has "$out" "(Project brain loaded from $HM/b/notes/STATUS.md (brain \"b\", chosen with CD_BRAIN). "
+want="(Project brain loaded from $HM/b/notes/STATUS.md (brain \"b\", chosen with CD_BRAIN). For this work's current state it overrides older notes in memory; rules in CLAUDE.md still apply. Working rules: context-discipline skill.)"
+check "the closing line, one line: for the work's current state this STATUS overrides older notes in memory; CLAUDE.md rules still apply" \
+  eval '[ "$(printf "%s\n" "$out" | tail -n 1)" = "$want" ]'
 hook "$HM/plain/x" CD_BRAIN=b
 check "CD_BRAIN=b in a folder with no brain: loads b" has "$out" status-of-b
 hook "$HM/a/src" CD_BRAIN=none

@@ -68,10 +68,12 @@ case $? in
 esac
 status="$CD_STATUS"; size="$CD_SIZE"
 
-# Print it (cut on a character boundary if too long), then one line naming the brain.
+# Print it (cut on a character boundary if too long), then one line naming the brain and its place: for the
+# work's current state it beats older notes in memory, while the rules in CLAUDE.md still apply.
 # Characters are counted as Claude Code counts them: JavaScript string length, so most characters are 1
 # and emoji (4-byte UTF-8) are 2. Bytes are never fewer, so a file of at most $budget bytes always fits.
-loaded="(Project brain loaded from $status (brain \"$CD_NAME\", chosen with $CD_HOW). Working rules: context-discipline skill.)"
+loaded="(Project brain loaded from $status (brain \"$CD_NAME\", chosen with $CD_HOW). For this work's current state it\
+ overrides older notes in memory; rules in CLAUDE.md still apply. Working rules: context-discipline skill.)"
 name=$(basename -- "$status" 2>/dev/null) || name=""
 # 200: room for the trim notice's fixed text and numbers, plus the file name it gives; ${#...} counts bytes
 # (>= characters)
