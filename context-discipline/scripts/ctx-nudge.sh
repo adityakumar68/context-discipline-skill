@@ -34,6 +34,13 @@
 # State: one small file per session in ${TMPDIR:-/tmp}/context-discipline/ (a private folder; if it is not one,
 # the hook stays silent rather than repeat itself).
 #
+# STATUS changed under this window: several windows may share a brain. The SessionStart hook records, per window,
+# the STATUS it printed and its mtime and size (<config>/brain-sessions/seen-<window key>). At each prompt this hook
+# stats STATUS once; if it changed since, it adds one note (re-read it before relying on it or editing it) and
+# records the new mtime, so the note comes once per change. A change made by this session's own main-thread tool
+# call (one that names the STATUS path) since the previous prompt is recorded without a note. No record yet (or a
+# record of another brain): recorded, no note.
+#
 # Contract: prints nothing, or one JSON object with additionalContext. Never blocks the prompt, always exits 0,
 # never touches the network. Needs python3 (3.9+) to measure; without it the hook does nothing.
 
@@ -47,6 +54,8 @@ fi
 [ -n "$input" ] || exit 0
 cd_select_brain "$input" >/dev/null 2>&1 || exit 0   # no brain for this session: nothing to do
 command -v python3 >/dev/null 2>&1 || exit 0
+seen=""   # this window's record of the STATUS it was shown (written by brain-hook.sh)
+key=$(cd_window_key "$input") && seen="$(cd_config_dir)/brain-sessions/seen-$key"
 
 # The measuring is done in Python (standard library only); its code is read here, so the hook stays one file.
 IFS= read -r -d '' measure <<'PY'
@@ -150,12 +159,13 @@ def call_in(lines, start, kept):
 
 def last_call(path, since):
     """Read the end of the transcript. since: the offset it had reached at the previous prompt (None if unknown).
-    Returns (call, boundary, new, done, unsearched):
+    Returns (call, boundary, new, done, unsearched, lines, base):
       call       the last main-thread call after the last compaction (None if there is none yet)
       boundary   the uuid of that compaction's boundary record ("" if it has none, None if none was found)
       new        whether that boundary was written at or after since (always True when since is None)
       done       the offset just past the last complete line (None if unknown), the next prompt's since
-      unsearched whether more than MAX_TAIL bytes were written since since, so a compaction may be unseen."""
+      unsearched whether more than MAX_TAIL bytes were written since since, so a compaction may be unseen
+      lines, base the lines read and the offset of the first (for touched_in)."""
     with open(path, "rb") as f:
         size = f.seek(0, 2)
         if since is not None and not 0 <= since <= size:
@@ -174,7 +184,7 @@ def last_call(path, since):
     if b is not None and since is not None:
         new = base + sum(len(x) + 1 for x in lines[:b[0]]) >= since
     unsearched = since is not None and size - since > MAX_TAIL
-    return call, (b[1] if b else None), new, done, unsearched
+    return call, (b[1] if b else None), new, done, unsearched, lines, base
 
 
 def truthy(v):
@@ -260,6 +270,90 @@ def state_dir():
     return d
 
 
+SEEN_CAP = 4096   # bytes; a window's record is two short lines
+
+
+def read_small(path):
+    """The text of path if it is a regular file of at most SEEN_CAP bytes, "" if it does not exist, else None (a
+    FIFO, a device, a folder or a huge file is never read)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > SEEN_CAP:
+            return None
+        return os.read(fd, SEEN_CAP + 1).decode("utf-8", "replace")
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def write_seen(path, status, mark):
+    """Replace the window's record atomically, in a real folder only (never through a symlink)."""
+    folder = os.path.dirname(path)
+    try:
+        if not os.path.lexists(folder):
+            os.mkdir(folder, 0o700)
+        if not stat.S_ISDIR(os.lstat(folder).st_mode):
+            return
+        fd, tmp = tempfile.mkstemp(prefix=".seen.", dir=folder)
+    except OSError:
+        return
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(f"{status}\n{mark}\n")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def stale_check(status, seen):
+    """(changed, mark): whether STATUS changed since this window last read it, and the "<mtime> <size>" to record
+    (None: record nothing, as when the record is not a regular file or STATUS cannot be measured)."""
+    if not status or not seen:
+        return False, None
+    try:
+        st = os.stat(status)
+    except OSError:
+        return False, None
+    mark = f"{int(st.st_mtime)} {st.st_size}"
+    old = read_small(seen)
+    if old is None:
+        return False, None
+    lines = old.split("\n")
+    if len(lines) >= 2 and lines[0] == status:
+        return (False, None) if lines[1].strip() == mark else (True, mark)
+    return False, mark   # no record yet, or one of another brain: record it, say nothing
+
+
+def touched_in(lines, base, since, needles):
+    """Whether a main-thread tool call written at or after offset since (anywhere if None) names one of needles."""
+    keys = [n.encode("utf-8") for n in needles]
+    off = base
+    for line in lines:
+        start, off = off, off + len(line) + 1
+        if (since is not None and start < since) or b"tool_use" not in line or not any(k in line for k in keys):
+            continue
+        r = parse(line)
+        if not r or r.get("type") != "assistant" or r.get("isSidechain"):
+            continue
+        content = r.get("message", {}).get("content") if isinstance(r.get("message"), dict) else None
+        for c in content if isinstance(content, list) else []:
+            if isinstance(c, dict) and c.get("type") == "tool_use":
+                text = json.dumps(c.get("input"), ensure_ascii=False)
+                if any(n in text for n in needles):
+                    return True
+    return False
+
+
 def main():
     try:
         hook = json.load(sys.stdin)
@@ -267,12 +361,36 @@ def main():
         return
     if not isinstance(hook, dict):
         return
+    status = os.environ.get("CD_STATUS") or ""
+    seen = os.environ.get("CD_SEEN") or ""
+    changed, mark = stale_check(status, seen)
+    needles = [n for n in dict.fromkeys((status, os.environ.get("CD_STATUS_REG") or "")) if n] if changed else []
+    note, touched = None, False
     path = hook.get("transcript_path")
-    if not isinstance(path, str) or not os.path.isfile(path):
-        return
-    folder = state_dir()
-    if folder is None:
-        return
+    if isinstance(path, str) and os.path.isfile(path):
+        folder = state_dir()
+        if folder is not None:
+            note, touched = context_note(hook, path, folder, needles)
+    notes = []
+    if mark is not None:
+        if changed and not touched:
+            shown = re.sub(r"[\x00-\x1f\x7f]", "?", status)[:2100]
+            name = re.sub(r"[^a-z0-9-]", "?", os.environ.get("CD_NAME") or "")[:32]
+            notes.append(
+                f'{os.path.basename(shown)} of brain "{name}" ({shown}) was updated since this session last read it '
+                f"(probably by another session); re-read it before relying on it or editing it."
+            )
+        write_seen(seen, status, mark)
+    if note:
+        notes.append(note)
+    if notes:
+        out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "\n\n".join(notes)}}
+        sys.stdout.write(json.dumps(out) + "\n")
+
+
+def context_note(hook, path, folder, needles):
+    """(the context-check note or None, whether one of needles was named by this session's own tool calls since
+    the previous prompt). Updates the session's state file."""
     sid = hook.get("session_id")
     if not isinstance(sid, str) or not sid:
         sid = os.path.basename(path)
@@ -286,9 +404,11 @@ def main():
         v = state.get(key)
         return v if isinstance(v, int) and not isinstance(v, bool) else None
 
-    rec, boundary, new, done, unsearched = last_call(path, count("size"))
+    since = count("size")
+    rec, boundary, new, done, unsearched, lines, base = last_call(path, since)
+    touched = bool(needles) and touched_in(lines, base, since, needles)
     if rec is None and boundary is None:
-        return
+        return None, touched
     step = count("step")
     step = -1 if step is None else step
     ctx = None
@@ -327,9 +447,7 @@ def main():
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(state, fh)
         os.replace(tmp, sfile)
-    if note:
-        out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": note}}
-        sys.stdout.write(json.dumps(out) + "\n")
+    return note, touched
 
 
 try:
@@ -340,4 +458,5 @@ PY
 
 # exec, so a hook timeout (or any kill) reaches python itself instead of leaving it orphaned. The script ends in
 # try/except, so it always exits 0.
-CD_STATUS="$CD_STATUS" exec python3 -I -c "$measure" 2>/dev/null <<<"$input"
+CD_STATUS="$CD_STATUS" CD_STATUS_REG="$CD_REG_DIR/$CD_REG_STATUS" CD_SEEN="$seen" CD_NAME="$CD_NAME" \
+  exec python3 -I -c "$measure" 2>/dev/null <<<"$input"

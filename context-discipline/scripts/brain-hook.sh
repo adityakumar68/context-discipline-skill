@@ -12,8 +12,10 @@
 #
 # Contract: with no brain, prints one line saying so and naming the registered brains (nothing on a compaction,
 # where the start already said it). When a chosen brain is refused, prints one warning line naming it (no file
-# content). Prints nothing at all when CD_HOOKS=off or the input is not a JSON object. Always exits 0, never writes
-# files, never touches the network.
+# content). Prints nothing at all when CD_HOOKS=off or the input is not a JSON object. Always exits 0, never touches
+# the network. Its one write: after printing a STATUS, it records for this window what it showed (path, mtime and
+# size) in <config>/brain-sessions/seen-<window key>, so the UserPromptSubmit hook (ctx-nudge.sh) can say when
+# another session changes that STATUS.
 
 LIMIT=9000   # characters of STATUS printed in full; longer files are cut to this many, with a notice
 CAP=10000    # Claude Code replaces hook output over 10,000 characters with a 2,000-character preview
@@ -34,6 +36,23 @@ no_brain() {
   done <<<"$names"
   [ "$n" -gt 10 ] && more=" and $((n - 10)) more"
   printf 'No brain attached. Brains: %s%s. Type /brain <name> to attach one.\n' "$shown" "$more"
+}
+
+# record_seen: remember, for this window, which STATUS it was shown and its mtime and size (two lines). Never
+# written through a symlink; any failure is ignored.
+record_seen() {
+  local key ses mtime tmp
+  key=$(cd_window_key "$input") || return 0
+  ses="$(cd_config_dir)/brain-sessions"
+  if [ ! -e "$ses" ] && [ ! -L "$ses" ]; then (umask 077 && mkdir -p -- "$ses") 2>/dev/null || return 0; fi
+  [ -d "$ses" ] && [ ! -L "$ses" ] && [ ! -d "$ses/seen-$key" ] || return 0
+  mtime=$(date -r "$status" +%s 2>/dev/null) || return 0
+  tmp=$(mktemp "$ses/.seen.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s\n%s %s\n' "$status" "$mtime" "$size" > "$tmp" 2>/dev/null && mv -f -- "$tmp" "$ses/seen-$key" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "$tmp" 2>/dev/null
+  return 0
 }
 
 input=""
@@ -94,4 +113,5 @@ else
   [ -n "$(tail -c 1 "$status" 2>/dev/null)" ] && printf '\n'
 fi
 printf '%s\n' "$loaded"
+record_seen
 exit 0

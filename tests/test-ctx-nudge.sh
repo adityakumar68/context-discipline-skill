@@ -40,6 +40,8 @@ TR="$T/tr"; mkdir -p "$TR"
 #   u           user record                         big:<bytes>  user record with a large tool result
 #   bad         a line that is not JSON             cut         a truncated last line
 #   cutb:<uuid> a compact boundary still being written (its first 40 bytes, no newline: must be last)
+#   e:<path>    main-thread Edit of <path>     se:<path>  the same in a subagent (isSidechain)
+#   bash:<path> main-thread Bash command that names <path>
 gen() {
   python3 -I - "$@" <<'PY'
 import json, sys
@@ -84,6 +86,14 @@ for spec in sys.argv[2:]:
         lines.append("{not json")
     elif k == "cut":
         lines.append(call(150000)[:60])
+    elif k in ("e", "se", "bash"):
+        r = json.loads(call(1000, side=(k == "se")))
+        use = {"type": "tool_use", "id": "t%d" % n[0], "name": "Edit",
+               "input": {"file_path": a[0], "old_string": "x", "new_string": "y"}}
+        if k == "bash":
+            use.update(name="Bash", input={"command": "sed -i '' 's/a/b/' " + a[0]})
+        r["message"]["content"] = [use]
+        lines.append(json.dumps(r, separators=(",", ":")))
 with open(out, "w") as f:
     f.write("\n".join(lines) + ("" if sys.argv[-1].split(":")[0] in ("cut", "cutb") else "\n"))
 PY
@@ -335,6 +345,68 @@ out=$(python3 -I -c 'import json,sys; print(json.dumps({"session_id": "x", "tran
   | env -u CLAUDE_PROJECT_DIR -u CD_CTX_WINDOW -u CLAUDE_CODE_AUTO_COMPACT_WINDOW HOME="$HM" TMPDIR="$TS2" CD_BRAIN=p \
   bash "$N" 2>&1); rc=$?
 check "state folder is a symlink: no note, nothing written through it" eval 'quiet && [ -z "$(ls -A "$T/elsewhere")" ]'
+
+# --- STATUS updated by another session: one note, once per change -----------------------------------------------
+# The window's record (<config>/brain-sessions/seen-<window key>) is written by the SessionStart hook when it prints
+# STATUS, and by this hook when it notes a change.
+H="$S/brain-hook.sh"; ST="$P/docs/STATUS.md"; SEEN="$HM/.claude/brain-sessions/seen-pid-$$"
+rm -rf "$HM/.claude/brain-sessions"
+start_hook() { printf '{"session_id": "w1", "source": "%s"}' "${1:-startup}" | env HOME="$HM" CD_BRAIN=p CLAUDE_PID=$$ bash "$H" >/dev/null 2>&1; }
+later() { python3 -I -c 'import os, sys; t = os.stat(sys.argv[1]).st_mtime + int(sys.argv[2]); os.utime(sys.argv[1], (t, t))' "$ST" "${1:-10}"; }
+stale() { has "$(note)" "was updated since this session last read it"; }
+start_hook
+check "SessionStart with a brain: records the STATUS it printed for this window (path, mtime, size)" \
+  eval '[ "$(head -n 1 "$SEEN")" = "$ST" ] && [ "$(sed -n 2p "$SEEN")" = "$(python3 -I -c "import os, sys; s = os.stat(sys.argv[1]); print(int(s.st_mtime), s.st_size)" "$ST")" ]'
+gen "$TR/s" a:1000; W="sess-$((++k))"
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "STATUS unchanged since it was loaded: no note" quiet
+printf 'line from another session\n' >> "$ST"; later
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "STATUS changed by another session: one note naming the brain and the file, to re-read it before relying on it or editing it" \
+  eval 'stale && has "$(note)" "STATUS.md of brain \"p\" ($ST)" && has "$(note)" "probably by another session" && has "$(note)" "re-read it before relying on it or editing it"'
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "next prompt, no further change: no repeat" quiet
+later 20; run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "changed again: noted again" stale
+gen "$TR/s" a:1000 u "e:$ST"; later 30; run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "changed by this session's own Edit since the previous prompt: no note" quiet
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "... and the record now holds that version (no note on the next prompt either)" quiet
+gen "$TR/s" a:1000 u "e:$ST" u "bash:$ST"; later 40; run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "changed by this session's own Bash command naming STATUS: no note" quiet
+gen "$TR/s" a:1000 u "e:$ST" u "bash:$ST" u "se:$ST"; later 50; run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "changed by a subagent's Edit (it did not read it into this session): noted" stale
+gen "$TR/s" a:1000 u "e:$ST" u "bash:$ST" u "se:$ST" u "e:$P/docs/OTHER.md"; later 60; run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "an own Edit of another file does not hide the change: noted" stale
+later 70; run "$P" - "$W" CLAUDE_PID=$$
+check "no transcript_path in the input: the change is still noted" stale
+later 80; gen "$TR/s2" a:150000; run "$P" "$TR/s2" "sess-$((++k))" CLAUDE_PID=$$
+check "change and a context step at the same prompt: both notes in one additionalContext" \
+  eval 'stale && nudged "75%" && [ "$(printf "%s" "$out" | grep -c additionalContext)" = 1 ]'
+rm -f "$SEEN"; later 90; run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "no record for this window yet (installed mid-session): no note, the record is written" \
+  eval 'quiet && [ "$(head -n 1 "$SEEN")" = "$ST" ]'
+regset q "$HM/qq"; mkdir -p "$HM/qq"; echo q > "$HM/qq/STATUS.md"
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$ CD_BRAIN=q
+check "the window's brain is another one than its record names: no note, the record follows the brain" \
+  eval 'quiet && [ "$(head -n 1 "$SEEN")" = "$HM/qq/STATUS.md" ]'
+regset
+cp "$SEEN" "$T/seen.before"
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$ CD_BRAIN=
+check "no brain: no note, no record written" eval 'quiet && cmp -s "$SEEN" "$T/seen.before"'
+rm -f "$SEEN"; mkfifo "$SEEN"; later 100
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "record that is a FIFO: no hang, no note, left alone" eval 'quiet && [ -p "$SEEN" ]'
+rm -f "$SEEN"; start_hook; rm -rf "$HM/.claude/brain-sessions"; mkdir -p "$T/elsewhere2"
+ln -s "$T/elsewhere2" "$HM/.claude/brain-sessions"; later 110
+run "$P" "$TR/s" "$W" CLAUDE_PID=$$
+check "brain-sessions is a symlink: nothing written through it, no note" eval 'quiet && [ -z "$(ls -A "$T/elsewhere2")" ]'
+rm -f "$HM/.claude/brain-sessions"
+start=$(python3 -c 'import time; print(time.time())')
+for i in 1 2 3 4 5; do run "$P" "$TR/s" "$W" CLAUDE_PID=$$; done
+ms=$(python3 -c "import time; print(int((time.time() - $start) * 200))")
+check "with a brain and an unchanged STATUS: ~${ms} ms per prompt (limit 500)" eval '[ "$ms" -lt 500 ]'
+rm -rf "$HM/.claude/brain-sessions"
 
 # --- speed: a 60 MB transcript --------------------------------------------------------------------------------------
 python3 -I - "$TR/huge" <<'PY'

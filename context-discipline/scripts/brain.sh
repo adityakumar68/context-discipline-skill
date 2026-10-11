@@ -236,9 +236,13 @@ new_name_ok() {
 
 # --- choices ----------------------------------------------------------------------------------------------------
 
-# prune: remove choices older than 7 days, unless their window (same PID, same start) still runs.
+# prune: remove choices older than 7 days, unless their window (same PID, same start) still runs, and the
+# windows' records of the STATUS they were shown (seen-*, rewritten at every start and change) older than 7 days.
 prune() {
   local f base start now
+  for f in "$SES"/seen-pid-* "$SES"/seen-sid-*; do
+    [ -f "$f" ] && [ ! -L "$f" ] && [ -n "$(find "$f" -mtime +6 2>/dev/null)" ] && rm -f -- "$f"
+  done
   for f in "$SES"/pid-* "$SES"/sid-*; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     [ -n "$(find "$f" -mtime +6 2>/dev/null)" ] || continue

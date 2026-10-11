@@ -232,6 +232,13 @@ printf 'alpha\n%s\n' "$(. "$S/brain-lib.sh"; cd_process_start $PPID)" > "$SES/pi
 bc "$HM/a" beta
 check "writing a choice prunes 8-day-old choices of finished windows" eval '[ ! -e "$SES/pid-1" ] && [ ! -e "$SES/sid-old" ]'
 check "... and keeps recent ones, and old ones whose window still runs" eval '[ -e "$SES/sid-recent" ] && [ -e "$SES/pid-$PPID" ]'
+check "/brain <name> records the STATUS it printed for this window (seen-pid-<pid>)" \
+  eval '[ "$(head -n 1 "$SES/seen-pid-$$")" = "$HM/b/notes/STATUS.md" ]'
+printf 'x\n1 1\n' > "$SES/seen-pid-1"; old "$SES/seen-pid-1"; printf 'x\n1 1\n' > "$SES/seen-sid-new"
+bc "$HM/a" beta
+check "writing a choice prunes 8-day-old records too, keeping recent ones" \
+  eval '[ ! -e "$SES/seen-pid-1" ] && [ -e "$SES/seen-sid-new" ]'
+rm -f "$SES/seen-sid-new"
 
 # --- many windows on one brain ---------------------------------------------------------------------------------------
 # Window 1 is CLAUDE_PID=$$ (bc's default), window 2 is CLAUDE_PID=$PPID: both processes run while the tests do.

@@ -264,6 +264,24 @@ check "no python3: CD_BRAIN=b gives one warning saying python3 is needed" \
 out=$(cd "$HM/a" && printf '{"cwd": "%s"}' "$HM/a" | env PATH="$NOPY" HOME="$HM" "$NOPY/bash" "$H" 2>&1)
 check "no python3, no choice: the hint, without names" eval 'nobrain "$out" && has "$out" "/brain" && ! has "$out" "Brains:"'
 
+# --- the SessionStart hook records, per window, the STATUS it printed (for the stale-STATUS note) ----------------
+rm -rf "$CFG/brain-sessions"
+hook "$HM/plain" CD_BRAIN=b CLAUDE_PID=$$
+check "a STATUS printed: <config>/brain-sessions/seen-pid-<pid> holds its path, mtime and size; folder private" \
+  eval '[ "$(head -n 1 "$CFG/brain-sessions/seen-pid-$$")" = "$HM/b/notes/STATUS.md" ] && [ "$(sed -n 2p "$CFG/brain-sessions/seen-pid-$$" | wc -w | tr -d " ")" = 2 ] && [ "$(ls -ld "$CFG/brain-sessions" | cut -c1-10)" = drwx------ ]'
+hook "$HM/plain" CD_BRAIN=b
+check "no CLAUDE_PID: the record is keyed by the session id" eval '[ -f "$CFG/brain-sessions/seen-sid-sess-1" ]'
+rm -rf "$CFG/brain-sessions"
+hook "$HM/plain" CLAUDE_PID=$$
+check "no brain: no record" eval '[ ! -e "$CFG/brain-sessions" ]'
+hook "$HM/plain" CD_BRAIN=zzz CLAUDE_PID=$$
+check "a refused brain: no record" eval '[ ! -e "$CFG/brain-sessions" ]'
+mkdir -p "$T/away"; ln -s "$T/away" "$CFG/brain-sessions"
+hook "$HM/plain" CD_BRAIN=b CLAUDE_PID=$$; rc=$?
+check "brain-sessions is a symlink: STATUS still printed, nothing written through it" \
+  eval '[ $rc = 0 ] && has "$out" status-of-b && [ -z "$(ls -A "$T/away")" ]'
+rm -f "$CFG/brain-sessions"
+
 # --- speed: a chosen brain costs one small python3 run and one ps ------------------------------------------------
 choose "pid-$$" b "$start"
 t0=$(python3 -I -c 'import time; print(time.time())')
