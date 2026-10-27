@@ -58,10 +58,11 @@ registry "$REG" a "$HM/a" STATUS.md b "$HM/b/notes" STATUS.md
 # choose <key> <name> [start]: what /brain <name> leaves for a window: <config>/brain-sessions/<key>.
 choose() { mkdir -p "$CFG/brain-sessions"; printf '%s\n%s\n' "$2" "${3-}" > "$CFG/brain-sessions/$1"; }
 unchoose() { rm -rf "$CFG/brain-sessions"; }
-# hook <cwd> [VAR=value...]: run brain-hook.sh for session sess-1 in <cwd>, with the fake home. Sets out.
+# hook <cwd> [VAR=value...]: run brain-hook.sh in <cwd>, with the fake home, for session $SID (default sess-1)
+# starting from $SRC (default startup). Sets out.
 hook() {
   local cwd="$1"; shift
-  out=$(printf '{"cwd": "%s", "session_id": "sess-1", "source": "startup"}' "$cwd" \
+  out=$(printf '{"cwd": "%s", "session_id": "%s", "source": "%s"}' "$cwd" "${SID:-sess-1}" "${SRC:-startup}" \
     | env HOME="$HM" "$@" perl -e 'alarm shift; exec @ARGV' 10 bash "$H" 2>&1)
 }
 
@@ -138,20 +139,20 @@ check "the /brain choice wins over CD_BRAIN" has "$out" status-of-b
 out=$(printf '{"cwd": "%s", "session_id": "new-after-clear", "source": "clear"}' "$HM/a" \
   | env HOME="$HM" CLAUDE_PID=$$ bash "$H" 2>&1)
 check "after /clear (new session id, same window): the choice still holds" has "$out" status-of-b
-hook "$HM/a" CLAUDE_PID=1
-check "another window (other CLAUDE_PID): the choice is not used" nobrain "$out"
-hook "$HM/a" CLAUDE_PID=12x
+SID=sess-w2 hook "$HM/a" CLAUDE_PID=1
+check "another window (other CLAUDE_PID, its own session): the choice is not used" nobrain "$out"
+SID=sess-w2 hook "$HM/a" CLAUDE_PID=12x
 check "CLAUDE_PID that is not a number: ignored" nobrain "$out"
 choose "pid-$$" none
 hook "$HM/a" CLAUDE_PID=$$ CD_BRAIN=b
 check "/brain none: no brain even with CD_BRAIN set, and no hint" [ -z "$out" ]
 choose "pid-$$" 'Not A Name'
-hook "$HM/a" CLAUDE_PID=$$
+SID=sess-w2 hook "$HM/a" CLAUDE_PID=$$
 check "a choice file that holds no valid name: ignored" nobrain "$out"
 
 # The choice records when its window started, so a later process that gets the same PID does not inherit it.
 choose "pid-$$" b "Mon Jan 1 00:00:00 2001"
-hook "$HM/a" CLAUDE_PID=$$
+SID=sess-w2 hook "$HM/a" CLAUDE_PID=$$
 check "choice recorded for an older process with the same PID: ignored" nobrain "$out"
 start=$(. "$S/brain-lib.sh"; cd_process_start $$)
 choose "pid-$$" b "$start"
@@ -178,6 +179,69 @@ out=$(printf '{"cwd": "%s", "session_id": "sess-2"}' "$HM/a" | env HOME="$HM" ba
 check "no CLAUDE_PID, another session id: not used" nobrain "$out"
 out=$(printf '{"cwd": "%s"}' "$HM/a" | env HOME="$HM" CLAUDE_CODE_SESSION_ID=sess-1 bash "$H" 2>&1)
 check "no session_id in the input: \$CLAUDE_CODE_SESSION_ID is the key" has "$out" status-of-b
+unchoose
+
+# A session also remembers its brain under its own id (ses-<session id>): resuming it starts a new Claude Code
+# process (a new CLAUDE_PID, the same session id), and the brain comes back there.
+choose ses-sess-1 b
+hook "$HM/a" CLAUDE_PID=$$
+check "resumed session in a new window: its remembered brain comes back" \
+  eval 'has "$out" status-of-b && has "$out" "(brain \"b\", chosen with /brain)"'
+start=$(. "$S/brain-lib.sh"; cd_process_start $$)
+check "... and the new window adopts it, as if /brain b had been typed there (name and process start)" \
+  eval '[ "$(head -n 1 "$CFG/brain-sessions/pid-$$")" = b ] && [ "$(sed -n 2p "$CFG/brain-sessions/pid-$$")" = "$start" ]'
+unchoose; choose ses-sess-1 b
+hook "$HM/a" CLAUDE_PID=$$ CD_BRAIN=a
+check "CD_BRAIN wins over the remembered brain" eval 'has "$out" status-of-a && ! has "$out" status-of-b'
+unchoose; choose ses-sess-1 none
+hook "$HM/a" CLAUDE_PID=$$
+check "remembered /brain none: no brain and no hint" [ -z "$out" ]
+unchoose; choose ses-sess-2 b
+hook "$HM/a" CLAUDE_PID=$$
+check "another session's remembered brain: not used" nobrain "$out"
+unchoose; choose ses-sess-1 'Not A Name'
+hook "$HM/a" CLAUDE_PID=$$
+check "a remembered choice that holds no valid name: ignored" nobrain "$out"
+unchoose; choose "pid-$$" a "$start"; choose ses-sess-9 b
+SID=sess-9 SRC=resume hook "$HM/a" CLAUDE_PID=$$
+check "/resume of another session inside a window that has a brain: the resumed session's brain wins" \
+  eval 'has "$out" status-of-b && [ "$(head -n 1 "$CFG/brain-sessions/pid-$$")" = b ]'
+choose "pid-$$" a "$start"
+SID=sess-9 SRC=compact hook "$HM/a" CLAUDE_PID=$$
+check "on any other start (here a compaction) the window's choice still comes first" has "$out" status-of-a
+unchoose; choose ses-sess-1 gone
+SRC=resume hook "$HM/a" CLAUDE_PID=$$
+check "a remembered brain that is no longer registered: one warning, and the window does not adopt it" \
+  eval 'refused "$out" "brain \"gone\"" && [ ! -e "$CFG/brain-sessions/pid-$$" ]'
+unchoose; mkdir -p "$T/away2"; printf 'b\n\n' > "$T/away2/ses-sess-1"; ln -s "$T/away2" "$CFG/brain-sessions"
+SRC=resume hook "$HM/a" CLAUDE_PID=$$
+check "brain-sessions is a symlink: the remembered brain is read, nothing written through it" \
+  eval 'has "$out" status-of-b && [ "$(ls -A "$T/away2")" = ses-sess-1 ]'
+rm -f "$CFG/brain-sessions"
+unchoose; mkdir -p "$CFG/brain-sessions"; mkfifo "$CFG/brain-sessions/ses-sess-1"
+hook "$HM/a" CLAUDE_PID=$$; rc=$?
+check "remembered choice is a FIFO: skipped, no hang" eval '[ $rc = 0 ] && nobrain "$out"'
+
+# Every session that starts with a brain chosen with /brain is remembered, including one begun by /clear.
+unchoose; choose "pid-$$" b "$start"
+hook "$HM/a" CLAUDE_PID=$$
+check "a session started with the window's brain is remembered under its id" \
+  eval '[ "$(head -n 1 "$CFG/brain-sessions/ses-sess-1")" = b ]'
+out=$(printf '{"cwd": "%s", "session_id": "after-clear", "source": "clear"}' "$HM/a" \
+  | env HOME="$HM" CLAUDE_PID=$$ bash "$H" 2>&1)
+check "the session begun by /clear is remembered too" eval '[ "$(head -n 1 "$CFG/brain-sessions/ses-after-clear")" = b ]'
+choose "pid-$$" none
+hook "$HM/a" CLAUDE_PID=$$
+check "/brain none is remembered as none" eval '[ "$(head -n 1 "$CFG/brain-sessions/ses-sess-1")" = none ]'
+unchoose
+hook "$HM/a" CD_BRAIN=b CLAUDE_PID=$$
+check "a brain from CD_BRAIN is not remembered (it belongs to the launch, not the session)" \
+  eval '[ ! -e "$CFG/brain-sessions/ses-sess-1" ]'
+choose "pid-$$" b "$start"
+out=$(printf '{"cwd": "%s", "session_id": "../../evil", "source": "startup"}' "$HM/a" \
+  | env HOME="$HM" CLAUDE_PID=$$ bash "$H" 2>&1)
+check "a session id with path characters: kept inside brain-sessions" \
+  eval '[ -f "$CFG/brain-sessions/ses-evil" ] && [ ! -e "$CFG/evil" ] && [ ! -e "$HM/evil" ]'
 unchoose
 
 # A choice file that is not a regular file (a FIFO here) is skipped without blocking.

@@ -1,12 +1,17 @@
 # brain-lib.sh -- shared by the context-discipline hooks (brain-hook.sh, compact-log.sh, ctx-nudge.sh) and the
 # /brain command (brain.sh). Sourced, not run. A brain belongs to a Claude Code session, never to a folder: every
 # hook picks the session's brain with one set of rules (cd_select_brain), first match wins:
+#   0. on a resume (SessionStart source "resume"), the choice the resumed session remembered (rule 3), so /resume
+#      inside a window that already has a brain still brings back that session's own;
 #   1. the choice made with /brain <name> or /brain none in this Claude Code window: the file
 #      <config>/brain-sessions/<key>, where <config> is $CLAUDE_CONFIG_DIR or ~/.claude and <key> is
 #      pid-$CLAUDE_PID (the Claude Code process, so the choice survives /clear and compaction), else
 #      sid-<session id>;
 #   2. CD_BRAIN=<name> or CD_BRAIN=none in the environment;
-#   3. else no brain. The session's folder plays no part: nothing here reads a .claude/brain pointer (only
+#   3. the choice this session remembered from an earlier window: <config>/brain-sessions/ses-<session id>,
+#      written by /brain and at every session start that used a /brain choice. A resumed session runs in a new
+#      Claude Code process (a new pid-* key, the same session id), so this is how its brain comes back;
+#   4. else no brain. The session's folder plays no part: nothing here reads a .claude/brain pointer (only
 #      /brain add does, in brain.sh, to register the brain an old pointer names).
 # A name is looked up in the registry <config>/brains.json:
 #   {"version": 2, "brains": {"<name>": {"dir": "<abs brain folder>", "status": "<STATUS file, relative to dir>"}}}
@@ -14,7 +19,7 @@
 # were its STATUS file's folder and its status that file's name; /brain writes version 2 at its next change.
 # Either way the STATUS file is accepted only if, with every symlink resolved, it is a regular text file inside its
 # folder, and that folder is neither $HOME nor "/".
-# Never writes files, never touches the network.
+# Writes only choice files, through cd_put_choice; never touches the network.
 
 CD_CHOICE_READ=1024    # bytes of a window's choice file that are read
 CD_REGISTRY_CAP=1000000   # bytes; a larger registry is not read (the refusal reasons say 1,000,000)
@@ -131,14 +136,45 @@ cd_stat_start() {
 # process: the same for every hook, the Bash tool and skill commands, and across /clear), else sid-<session id>
 # (the input's session_id, else $CLAUDE_CODE_SESSION_ID; /clear starts a new one). Fails if there is neither.
 cd_window_key() {
-  local pid="${CLAUDE_PID:-}" sid=""
+  local pid="${CLAUDE_PID:-}" sid
   case "$pid" in ''|0*|*[!0-9]*) pid="" ;; esac
   if [ -n "$pid" ] && [ "${#pid}" -le 10 ]; then printf 'pid-%s\n' "$pid"; return 0; fi
+  sid=$(cd_session_id "$1") || return 1
+  printf 'sid-%s\n' "$sid"
+}
+
+# cd_session_id <json>: the session id (the input's session_id, else $CLAUDE_CODE_SESSION_ID), cut to at most 64 of
+# A-Z, a-z, 0-9, _ and -, so it is safe in a file name. Fails if there is none.
+cd_session_id() {
+  local sid=""
   [ -n "$1" ] && sid=$(cd_json_get "$1" session_id 2>/dev/null)
   [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
   sid=$(printf '%s' "$sid" | LC_ALL=C tr -cd 'A-Za-z0-9_-' | head -c 64)
   [ -n "$sid" ] || return 1
-  printf 'sid-%s\n' "$sid"
+  printf '%s\n' "$sid"
+}
+
+# cd_put_choice <file> <name|none> [start]: write a choice file atomically (a temporary file in the same folder,
+# then mv). Fails if <file> is a folder.
+cd_put_choice() {
+  local tmp
+  [ -d "$1" ] && return 1   # mv would move the file into it and report success
+  tmp=$(mktemp "$(dirname -- "$1")/.choice.XXXXXX" 2>/dev/null) || return 1
+  if printf '%s\n%s\n' "$2" "${3-}" > "$tmp" && mv -f -- "$tmp" "$1"; then return 0; fi
+  rm -f -- "$tmp"; return 1
+}
+
+# cd_remember_session <json> <name|none>: remember <name> as this session's brain in <config>/brain-sessions/
+# ses-<session id>. Resuming a session starts a new Claude Code process, so its window key (pid-*) changes but its
+# session id does not; cd_select_brain then finds the brain here. Written only into an existing, real brain-sessions
+# folder (/brain makes it); any failure is ignored.
+cd_remember_session() {
+  local sid ses
+  sid=$(cd_session_id "$1") || return 0
+  ses="$(cd_config_dir)/brain-sessions"
+  [ -d "$ses" ] && [ ! -L "$ses" ] || return 0
+  cd_put_choice "$ses/ses-$sid" "$2" 2>/dev/null
+  return 0
 }
 
 # cd_read_choice <key>: print the brain chosen for window <key> ("none" or a name). Fails if there is no choice,
@@ -328,20 +364,26 @@ cd_check_brain() {
 
 # cd_select_brain <json>: which brain this session uses (the rules at the top of this file), for a hook's input (or
 # "" outside a hook). Sets CD_HOW ("/brain" or "CD_BRAIN"; "" when nothing was chosen), CD_NAME (the chosen name,
-# "none", or ""), and on success what cd_check_brain sets. From here on LC_ALL=C.
+# "none", or ""), CD_RESUMED (1 when the choice is the one this session remembered from an earlier window, else ""),
+# and on success what cd_check_brain sets. From here on LC_ALL=C.
 # Returns 0 if a brain is selected and accepted; 1 if it is refused, with CD_SUBJECT and CD_REFUSED set (say
 # "<subject> <reason>"); 2 if the session has no brain (none chosen, or nothing chosen); 3 if the hooks must do
 # nothing at all (CD_HOOKS=off, or the input is not a JSON object).
 cd_select_brain() {
-  local key name
-  CD_HOW=""; CD_NAME=""; CD_SUBJECT=""; CD_REFUSED=""; CD_DIR=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""
+  local key name sid src
+  CD_HOW=""; CD_NAME=""; CD_RESUMED=""; CD_SUBJECT=""; CD_REFUSED=""; CD_DIR=""; CD_REL=""; CD_STATUS=""; CD_SIZE=""
   [ "${CD_HOOKS:-}" = off ] && return 3
   cd_input_ok "$1" || return 3
   LC_ALL=C; export LC_ALL
-  if key=$(cd_window_key "$1") && name=$(cd_read_choice "$key"); then
+  src=$(cd_json_get "$1" source 2>/dev/null) || src=""
+  if [ "$src" = resume ] && sid=$(cd_session_id "$1") && name=$(cd_read_choice "ses-$sid"); then
+    CD_HOW=/brain; CD_RESUMED=1   # a resumed session's own brain beats the window's choice for another session
+  elif key=$(cd_window_key "$1") && name=$(cd_read_choice "$key"); then
     CD_HOW=/brain
   elif [ -n "${CD_BRAIN:-}" ]; then
     CD_HOW=CD_BRAIN; name="$CD_BRAIN"
+  elif sid=$(cd_session_id "$1") && name=$(cd_read_choice "ses-$sid"); then
+    CD_HOW=/brain; CD_RESUMED=1   # chosen with /brain in an earlier window of this session
   else
     return 2
   fi

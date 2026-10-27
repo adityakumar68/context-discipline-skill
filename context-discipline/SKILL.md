@@ -23,7 +23,8 @@ in files. Every call resends the context, and a compaction replaces it with a lo
 
 A brain belongs to a Claude Code session, not to a folder: a name plus a folder holding `STATUS.md`,
 `00-Project-Overview.md`, `decisions/` and `handoffs/`. The user attaches one per window with `/brain <name>` (or
-`CD_BRAIN=<name>` at launch); a session without one gets a one-line hint at its start. To create one, agree a name
+`CD_BRAIN=<name>` at launch); a resumed session gets its brain back, and a session without one gets a one-line
+hint at its start. To create one, agree a name
 with the user, then:
 
 ```bash

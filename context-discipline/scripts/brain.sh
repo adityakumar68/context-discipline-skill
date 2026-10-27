@@ -10,8 +10,8 @@
 #                                   <config>/brains/<name> or <folder>, register it and attach it to this window
 #   brain.sh add <name> <folder|STATUS file>   register an existing brain: <folder>/STATUS.md, or that file
 #   brain.sh add <name>             register the brain an old .claude/brain pointer in the current folder names
-#   brain.sh rename <old> <new>     rename a brain (registry, the windows' choices, its compaction logs, and its
-#                                   folder when that is the default <config>/brains/<old>)
+#   brain.sh rename <old> <new>     rename a brain (registry, the windows' and sessions' choices, its compaction
+#                                   logs, and its folder when that is the default <config>/brains/<old>)
 #   brain.sh remove <name>          unregister a brain (its files and logs stay)
 #   brain.sh --args                 the same, with the words read from stdin as one raw string (what the /brain
 #                                   skill passes): split here like shell words ('...', "...", \) with nothing
@@ -20,9 +20,10 @@
 #
 # Registry: <config>/brains.json, <config> being $CLAUDE_CONFIG_DIR or ~/.claude. A window's choice:
 # <config>/brain-sessions/pid-$CLAUDE_PID (else sid-$CLAUDE_CODE_SESSION_ID), two lines: the name (or "none") and
-# when that Claude Code process started, so a later process with the same PID does not inherit it. Writing a
-# choice prunes choices older than 7 days whose window no longer runs. The hooks read both through brain-lib.sh,
-# with the same rules, so what this lists is what they load.
+# when that Claude Code process started, so a later process with the same PID does not inherit it. A session's
+# choice, so a resume brings it back: <config>/brain-sessions/ses-<session id>. Writing a choice prunes window
+# choices older than 7 days whose window no longer runs, and session choices older than 30 days. The hooks read
+# them all through brain-lib.sh, with the same rules, so what this lists is what they load.
 # Never moves or deletes a brain's files. The registry is replaced atomically, and only if it could be read.
 # Always exits 0: the /brain skill runs this through Claude Code's !`command` injection, which aborts the skill on
 # a non-zero exit before Claude sees any message. Errors are lines that start with "brain: ".
@@ -307,7 +308,9 @@ new_name_ok() {
 
 # prune: remove choices older than 7 days, unless their window (same PID, same start) still runs, and the
 # windows' records of the STATUS they were shown (seen-*, rewritten at every start and change) older than 7 days,
-# unless their window's process still runs (a record keeps no start time; a reused PID only keeps a small file).
+# unless their window's process still runs (a record keeps no start time; a reused PID only keeps a small file),
+# and sessions' remembered brains (ses-*, rewritten at every start of their session) older than 30 days, the time
+# Claude Code keeps a session to resume by default.
 prune() {
   local f base start now pid
   for f in "$SES"/seen-pid-* "$SES"/seen-sid-*; do
@@ -328,6 +331,10 @@ prune() {
     esac
     rm -f -- "$f"
   done
+  for f in "$SES"/ses-*; do
+    [ -f "$f" ] && [ ! -L "$f" ] && [ -n "$(find "$f" -mtime +29 2>/dev/null)" ] && rm -f -- "$f"
+  done
+  return 0
 }
 
 # live_choices [key]: the brain names (or "none") chosen by the windows that still run, one per line, leaving out
@@ -355,15 +362,6 @@ live_choices() {
 # windows <n> [other]: "1 window", "2 windows", "1 other window", ...
 windows() { if [ "$1" = 1 ]; then echo "1 ${2:+$2 }window"; else echo "$1 ${2:+$2 }windows"; fi; }
 
-# put_choice <file> <name> <start>: write a choice file atomically.
-put_choice() {
-  local tmp
-  [ -d "$1" ] && return 1   # mv would move the file into it and report success
-  tmp=$(mktemp "$SES/.choice.XXXXXX" 2>/dev/null) || return 1
-  if printf '%s\n%s\n' "$2" "$3" > "$tmp" && mv -f -- "$tmp" "$1"; then return 0; fi
-  rm -f -- "$tmp"; return 1
-}
-
 # remember_folder <name>: note that <name> was attached from this session's folder ($CLAUDE_PROJECT_DIR, else the
 # current one), so a later session started there can be told which brain was used here (a hint, never an attach).
 # <config>/brain-sessions/last-used: one "<folder><TAB><name>" line per folder, the latest last, at most 200.
@@ -382,7 +380,7 @@ remember_folder() {
   rm -f -- "$tmp"
 }
 
-# write_choice <name|none>: record the choice for this window.
+# write_choice <name|none>: record the choice for this window, and remember it for this session (ses-<id>).
 write_choice() {
   local key start=""
   if ! key=$(cd_window_key ""); then
@@ -397,7 +395,8 @@ write_choice() {
   chmod 700 "$SES" 2>/dev/null
   prune
   if [ -d "$SES/$key" ]; then say_err "$SES/$key is a folder; remove it, then run /brain again."; return 1; fi
-  put_choice "$SES/$key" "$1" "$start" || { say_err "cannot write $SES/$key (see README: Several brains, sandbox)."; return 1; }
+  cd_put_choice "$SES/$key" "$1" "$start" || { say_err "cannot write $SES/$key (see README: Several brains, sandbox)."; return 1; }
+  cd_remember_session "" "$1"   # so resuming this session in another window brings the brain back
 }
 
 # --- old .claude/brain pointers (read only to register the brain one names) ---------------------------------------
@@ -597,11 +596,11 @@ new() {
   pick "$name"
 }
 
-# rechoose <old> <new>: windows that chose <old> now read <new>. Each file is checked again just before it is
+# rechoose <old> <new>: windows and sessions that chose <old> now read <new>. Each file is checked again just before it is
 # replaced, so a choice that window made in the meantime is kept.
 rechoose() {
   local f name start tmp now
-  for f in "$SES"/pid-* "$SES"/sid-*; do
+  for f in "$SES"/pid-* "$SES"/sid-* "$SES"/ses-*; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     { IFS= read -r name; IFS= read -r start; } < <(head -c "$CD_CHOICE_READ" -- "$f" 2>/dev/null)
     [ "$name" = "$1" ] || continue

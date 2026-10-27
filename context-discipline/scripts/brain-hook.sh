@@ -3,9 +3,10 @@
 #
 # Reads the hook's JSON from stdin and prints the STATUS file of the session's brain, so Claude Code adds it to
 # context at every session start (startup, resume, clear, compact, fork). A brain belongs to the session, never to
-# a folder: it is, first match wins, the one chosen with /brain in this Claude Code window, else CD_BRAIN=<name>
-# (both looked up in <config>/brains.json; "none" means no brain), else none (brain-lib.sh has the rules). No
-# .claude/brain pointer is ever read.
+# a folder: it is, first match wins, the one chosen with /brain in this Claude Code window, else CD_BRAIN=<name>,
+# else the one this session remembered from an earlier window (a resumed session), all looked up in
+# <config>/brains.json ("none" means no brain), else none (brain-lib.sh has the rules). No .claude/brain pointer is
+# ever read.
 #
 # The registered STATUS is printed only if, with every symlink resolved, it is a regular text file inside its
 # brain folder (named by a path relative to it; the folder may not be $HOME or "/").
@@ -15,8 +16,10 @@
 # else the registered brains. A hint: it never attaches one. Nothing on a compaction (the start already said it),
 # and nothing when the user chose no brain (/brain none, CD_BRAIN=none). When a chosen brain is refused, prints
 # one warning line naming it (no file content). Prints nothing at all when CD_HOOKS=off or the input is not a JSON
-# object. Always exits 0, never touches the network. Its one write: after printing a STATUS, it records for this
-# window what it showed (the path, and its mtime in ns, size and inode, taken before printing) in
+# object. Always exits 0, never touches the network. Its writes, all in <config>/brain-sessions: when the brain was
+# chosen with /brain, the session's remembered choice (ses-<session id>), and for a resumed session in a new window
+# that choice adopted as this window's (pid-*); and after printing a STATUS, a record for this window of what it
+# showed (the path, and its mtime in ns, size and inode, taken before printing) in
 # <config>/brain-sessions/seen-<window key>, so the UserPromptSubmit hook (ctx-nudge.sh) can say when another
 # session changes that STATUS.
 
@@ -95,12 +98,29 @@ record_seen() {
   return 0
 }
 
+# remember: keep this session's /brain choice for a later resume (cd_remember_session), and when the choice came
+# from there (a resumed session in a new window), adopt it for this window as /brain would, so /clear, the other
+# hooks and the /brain list see it too. Any failure is ignored.
+remember() {
+  local key ses start=""
+  cd_remember_session "$input" "$CD_NAME"
+  [ "$CD_RESUMED" = 1 ] || return 0
+  key=$(cd_window_key "$input") || return 0
+  ses="$(cd_config_dir)/brain-sessions"
+  [ -d "$ses" ] && [ ! -L "$ses" ] || return 0
+  case "$key" in pid-*) start=$(cd_process_start "${key#pid-}") ;; esac
+  cd_put_choice "$ses/$key" "$CD_NAME" "$start" 2>/dev/null
+  return 0
+}
+
 input=""
 if [ ! -t 0 ]; then
   input=$(cat 2>/dev/null)
 fi
 cd_select_brain "$input"   # from here on LC_ALL=C: count and match bytes
-case $? in
+rc=$?
+[ "$CD_HOW" = /brain ] && [ "$rc" != 1 ] && remember   # never a refused brain
+case $rc in
   0) ;;
   1) printf '(Project brain not loaded: %s %s.)\n' "$CD_SUBJECT" "$CD_REFUSED"; exit 0 ;;
   2) [ "$CD_NAME" = none ] || no_brain "$input"; exit 0 ;;   # no hint when the user chose no brain

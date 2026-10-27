@@ -19,7 +19,12 @@ shared function (`cd_select_brain` in `brain-lib.sh`), first match wins:
    compaction. The file also holds when that process started, so a later process that reuses the PID does not
    inherit it. Any number of windows may choose the same brain.
 2. `CD_BRAIN=<name>` or `CD_BRAIN=none` in the environment.
-3. else no brain. The session's folder plays no part: no hook reads a `.claude/brain` pointer.
+3. the choice this session remembered: `<config>/brain-sessions/ses-<session id>`, written by `/brain` and at every
+   session start that used a `/brain` choice. `claude --resume` starts a new process (a new `$CLAUDE_PID`) with the
+   same session id, so this brings the brain back; the new window then adopts it as if `/brain` had been typed
+   there. On a resume (SessionStart source `resume`) this rule comes first, so `/resume` inside a window with a brain
+   loads the resumed session's own. A refused brain is never adopted. Kept 30 days; a fork starts without one.
+4. else no brain. The session's folder plays no part: no hook reads a `.claude/brain` pointer.
 
 A name is looked up in `<config>/brains.json`, `{"version": 2, "brains": {"<name>": {"dir": "<abs brain folder>",
 "status": "STATUS.md"}}}` (`status` is relative to `dir`), which `/brain` (`scripts/brain.sh`) writes. A version 1

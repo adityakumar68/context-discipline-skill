@@ -209,9 +209,13 @@ Which brain a session uses, first match wins:
 
 1. **The choice made with `/brain` in this window.** It holds until you change it, across `/clear` and compactions:
    it is keyed to the Claude Code process (`$CLAUDE_PID`), not to the session id, which `/clear` replaces. A new
-   window, or `claude --resume` in a new process, starts without one. Subagents of the window share it.
+   window starts without one. Subagents of the window share it.
 2. **`CD_BRAIN=<name>` (or `none`) at launch**, for example `CD_BRAIN=paper claude`.
-3. **None.** The session starts with one line: `No brain attached. Brains: paper, thesis. Type /brain <name> to
+3. **The brain the session had before.** `/brain` also remembers the choice for the session, so resuming it
+   (`claude --resume`, or after a restart) brings the same brain back in the new window. On a resume this comes
+   first, so `/resume` inside a window that already has a brain still loads the resumed session's own. Kept 30
+   days. A forked session gets a new session id and starts without one.
+4. **None.** The session starts with one line: `No brain attached. Brains: paper, thesis. Type /brain <name> to
    attach one.` If a window started in the same folder attached a brain with `/brain` before, the line suggests it
    (`Last used here: paper (type /brain paper)`); if the folder still has an old `.claude/brain` pointer, it says
    `/brain add <name>` registers it. It never attaches one by itself, and it says nothing when you chose no brain
@@ -239,8 +243,9 @@ may not be your home folder or `/`; the same 9,000-character limit applies. If a
 `/brain add <name> <dir>` points a moved brain's entry at its new folder. A window's choice is a two-line file in
 `~/.claude/brain-sessions/`: the name, and when its Claude Code process started, so a later process that gets the
 same PID does not inherit it. Choices older than 7 days are pruned when a new one is written, unless their window
-still runs. The same folder keeps, per window, which STATUS it was last shown (`seen-*`) and, per folder, which
-brain was last attached there (`last-used`).
+still runs. Each session's own choice (`ses-<session id>`, kept 30 days) is what brings its brain back on a resume. The
+same folder keeps, per window, which STATUS it was last shown (`seen-*`) and, per folder, which brain was last
+attached there (`last-used`).
 
 **Upgrading from folder pointers.** Earlier versions loaded the brain named by a `.claude/brain` pointer above the
 session's folder. Nothing reads those pointers now. Start Claude Code in such a folder and run `/brain add <name>`:
@@ -394,8 +399,9 @@ prompts replace this skill's briefs; this skill adds the hand-back contract and 
 **STATUS appears twice.** A project-level hook (for example a `cat STATUS.md` in the project's
 `.claude/settings.json`) also prints it. Remove that one; the global hook covers every session with a brain.
 
-**Do the hooks write files or use the network?** None uses the network. `brain-hook.sh` writes one small record per
-window (which STATUS it showed) in `~/.claude/brain-sessions/`. `compact-log.sh` writes one owner-only file per
+**Do the hooks write files or use the network?** None uses the network. `brain-hook.sh` writes small records in
+`~/.claude/brain-sessions/`: per window, which STATUS it showed; per session, the brain chosen with `/brain` (so a
+resume brings it back); and, on a resume in a new window, that choice for the window. `compact-log.sh` writes one owner-only file per
 compaction to `~/.claude/brain-logs/<name>/`, only when the session has a brain. `ctx-nudge.sh` keeps one small state
 file per session in `${TMPDIR:-/tmp}/context-discipline/` and updates the window's record. All three always exit 0.
 `/brain` writes the registry and its choice files in `~/.claude`; `/brain new` also runs `init-brain.sh`, which

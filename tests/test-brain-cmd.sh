@@ -185,8 +185,16 @@ check "/brain beta: the choice file is pid-<CLAUDE_PID>, holding the name and th
   eval '[ "$(head -n 1 "$SES/pid-$$")" = beta ] && [ "$(sed -n 2p "$SES/pid-$$")" = "$(. "$S/brain-lib.sh"; cd_process_start $$)" ]'
 check "the choices folder is private (mode 700)" eval '[ "$(ls -ld "$SES" | cut -c1-10)" = drwx------ ]'
 check "the hooks now use beta in this window, even inside project a" eval 'has "$(hookout "$HM/a")" status-of-b'
-check "another window is not affected (it has no brain)" \
-  eval 'o=$(hookout "$HM/a" CLAUDE_PID=1); ! has "$o" status-of && has "$o" "No brain attached"'
+# sesout <session id> [VAR=value...]: the hook's output for that session in project a, as another window (CLAUDE_PID=1).
+sesout() { local sid="$1"; shift
+  printf '{"cwd": "%s", "session_id": "%s", "source": "resume"}' "$HM/a" "$sid" | env HOME="$HM" CLAUDE_PID=1 "$@" bash "$H" 2>&1; }
+check "another window (another session) is not affected (it has no brain)" \
+  eval 'o=$(sesout s2); ! has "$o" status-of && has "$o" "No brain attached"'
+bc "$HM/a" CLAUDE_CODE_SESSION_ID=s-77 beta
+check "/brain beta also remembers it for the session (ses-<CLAUDE_CODE_SESSION_ID>)" \
+  eval '[ "$(head -n 1 "$SES/ses-s-77")" = beta ]'
+check "resuming that session in another window brings beta back" eval 'has "$(sesout s-77)" status-of-b'
+rm -f "$SES/pid-1"
 bc "$HM/a"
 check "list after /brain beta: beta marked, chosen with /brain" \
   eval 'hasline "$out" "^\* beta " && has "$out" "This window uses brain \"beta\" (chosen with /brain)"'
@@ -223,7 +231,8 @@ check "no CLAUDE_PID but CLAUDE_CODE_SESSION_ID: the choice is keyed by the sess
   eval '[ "$(head -n 1 "$SES/sid-abc-123" 2>/dev/null)" = alpha ]'
 
 # Choices older than 7 days are pruned when a choice is written, unless their window still runs.
-old() { python3 -I -c 'import os, sys, time; t = time.time() - 8 * 86400; os.utime(sys.argv[1], (t, t))' "$1"; }
+# old <file> [days]: make <file> look <days> (default 8) days old.
+old() { python3 -I -c 'import os, sys, time; t = time.time() - int(sys.argv[2]) * 86400; os.utime(sys.argv[1], (t, t))' "$1" "${2:-8}"; }
 printf 'alpha\nMon Jan 1 00:00:00 2001\n' > "$SES/pid-1"; old "$SES/pid-1"
 printf 'alpha\n\n' > "$SES/sid-old"; old "$SES/sid-old"
 printf 'alpha\n\n' > "$SES/sid-recent"
@@ -231,6 +240,12 @@ printf 'alpha\n%s\n' "$(. "$S/brain-lib.sh"; cd_process_start $PPID)" > "$SES/pi
 bc "$HM/a" beta
 check "writing a choice prunes 8-day-old choices of finished windows" eval '[ ! -e "$SES/pid-1" ] && [ ! -e "$SES/sid-old" ]'
 check "... and keeps recent ones, and old ones whose window still runs" eval '[ -e "$SES/sid-recent" ] && [ -e "$SES/pid-$PPID" ]'
+printf 'alpha\n\n' > "$SES/ses-week"; old "$SES/ses-week"
+printf 'alpha\n\n' > "$SES/ses-month"; old "$SES/ses-month" 31
+bc "$HM/a" beta
+check "a session's remembered brain is kept 30 days (a session can be resumed that long)" [ -e "$SES/ses-week" ]
+check "... and pruned after that" [ ! -e "$SES/ses-month" ]
+rm -f "$SES/ses-week"
 check "/brain <name> records the STATUS it printed for this window (seen-pid-<pid>)" \
   eval '[ "$(head -n 1 "$SES/seen-pid-$$")" = "$HM/b/notes/STATUS.md" ]'
 sleep 0 & dead=$!; wait "$dead"
@@ -306,7 +321,10 @@ bc "$HM/a" beta
 # --- rename and remove: the registry (rename also moves the compaction logs) ---------------------------------------
 before_b=$(tree "$HM/b")
 mkdir -p "$CFG/brain-logs/beta"; echo log > "$CFG/brain-logs/beta/2026-01-01-000000-abcdef12.md"
+printf 'beta\n\n' > "$SES/ses-earlier"
 bc "$HM/plain" rename beta bravo
+check "rename: a session that remembered beta now remembers bravo" eval '[ "$(head -n 1 "$SES/ses-earlier")" = bravo ]'
+rm -f "$SES/ses-earlier"
 check "rename beta bravo: registry entry renamed, same paths" \
   eval '[ $rc = 0 ] && reg "\"beta\" not in b and b[\"bravo\"][\"dir\"] == \"$HM/b/notes\""'
 check "rename: this window's choice of beta now reads bravo" eval '[ "$(head -n 1 "$SES/pid-$$")" = bravo ]'

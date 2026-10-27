@@ -7,7 +7,7 @@
 # recovered from the transcript.
 #
 # Only when the session has a brain, picked as the SessionStart hook picks it (brain-lib.sh): the one chosen with
-# /brain in this window, else CD_BRAIN. Never in the brain's own folder (it may be a git repo, and a summary can
+# /brain in this window, else CD_BRAIN, else the one the session remembered from an earlier window. Never in the brain's own folder (it may be a git repo, and a summary can
 # quote anything the session saw) and never in the session's folder. With no brain it does nothing.
 # The log folders are created private (mode 700) and never written through a symlink; existing files are never
 # overwritten; files are created readable by their owner only.
